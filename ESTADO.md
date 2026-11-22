@@ -5,7 +5,7 @@
 - 2 nichos de arranque: modelado-3d-espacios, fichas-tecnicas-ropa. Sistema abierto a cualquier nicho nuevo (`nuevo-nicho.md`).
 - 5 skills de calidad (humanizer, pensamiento-critico, psicologia-y-estatus, inteligencia-competitiva, editor-implacable).
 - Creación real de eventos en Calendar.app vía AppleScript cuando un lead responde interesado (probado, funciona).
-- Landing `web/index.html` (marca: El Socio). Repo: github.com/reyvonblon/Elsocio.git.
+- Landing `docs/index.html`: solo logo + caja de texto ("Escribe lo que necesitas...") que abre WhatsApp con el mensaje listo. Backend = WhatsApp (sin servicios externos). Repo: github.com/reyvonblon/Elsocio.git.
 - Gmail dedicado: elsociotuia@gmail.com.
 
 ## En prueba
