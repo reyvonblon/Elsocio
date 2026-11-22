@@ -2,6 +2,7 @@
 .env
 data/*.db
 data/*.csv
+data/*.log
 panel/mensajes.html
 __pycache__/
 *.pyc

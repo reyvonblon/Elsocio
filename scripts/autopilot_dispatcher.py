@@ -513,7 +513,7 @@ def sync_landing_messages(max_messages: int = 40) -> dict[str, object]:
             with imaplib.IMAP4_SSL(imap_host, 993, timeout=15) as imap:
                 imap.login(user, password)
                 imap.select("INBOX")
-                status_code, data = imap.search(None, 'FROM', '"web3forms.com"')
+                status_code, data = imap.search(None, 'FROM', '"notify"', 'FROM', '"web3forms.com"')
                 if status_code != "OK" or not data or not data[0]:
                     return {"imap_ready": True, "checked": 0, "new_messages": 0}
                 msg_ids = data[0].split()[-max_messages:]
