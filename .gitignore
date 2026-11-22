@@ -2,5 +2,6 @@
 .env
 data/*.db
 data/*.csv
+panel/mensajes.html
 __pycache__/
 *.pyc
