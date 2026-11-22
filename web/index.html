@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>El Socio</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --bg-card: #171a21;
+    --text: #eef1f6;
+    --muted: #9aa3b2;
+    --accent: #c6ff33;
+    --border: #262b35;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.55;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 56px 20px 80px; }
+  header { margin-bottom: 48px; }
+  .brand { font-size: 15px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); font-weight: 700; margin-bottom: 18px; }
+  h1 { font-size: 34px; line-height: 1.25; margin: 0 0 14px; font-weight: 700; }
+  .lead { font-size: 17px; color: var(--muted); max-width: 540px; }
+  section { margin: 44px 0; }
+  h2 { font-size: 20px; margin: 0 0 18px; }
+  .cards { display: grid; gap: 14px; }
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+  .card h3 { margin: 0 0 6px; font-size: 16px; }
+  .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+  .proof-list { padding-left: 20px; color: var(--muted); font-size: 15px; }
+  .proof-list li { margin-bottom: 8px; }
+  .cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 10px;
+  }
+  .btn {
+    display: inline-block;
+    padding: 13px 22px;
+    border-radius: 9px;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 15px;
+  }
+  .btn-primary { background: var(--accent); color: #0f1115; }
+  .btn-secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  footer { margin-top: 60px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); padding-top: 24px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">El Socio</div>
+    <h1>Resuelvo lo que necesites con IA, bien hecho y sin vueltas.</h1>
+    <p class="lead">
+      Trabajo directo: me dices qué necesitas, lo hago, y si es algo que se repite,
+      queda listo para hacerlo más rápido la próxima vez. Sin intermediarios, sin relleno.
+    </p>
+  </header>
+
+  <section>
+    <h2>Lo que puedo resolver</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>Modelado 3D de espacios</h3>
+        <p>Render de tu habitación, estudio de grabación o local antes de invertir en construcción. Ves exactamente cómo va a quedar.</p>
+      </div>
+      <div class="card">
+        <h3>Fichas técnicas de ropa</h3>
+        <p>Tech packs claros para que el taller entregue lo que pediste, no una interpretación distinta.</p>
+      </div>
+      <div class="card">
+        <h3>Algo distinto</h3>
+        <p>Si tu necesidad no está en la lista, escríbeme y lo vemos. Si se puede resolver con IA bien aplicada, lo resuelvo.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Cómo trabajo</h2>
+    <ul class="proof-list">
+      <li>Hablamos primero de lo que necesitas y el costo real — sin letra pequeña.</li>
+      <li>Te muestro avances concretos, no promesas genéricas.</li>
+      <li>Pagas cuando ves el resultado que acordamos, no antes de ver nada.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Hablemos</h2>
+    <p class="lead">Cuéntame qué necesitas por WhatsApp.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://wa.me/57XXXXXXXXXX" target="_blank" rel="noopener">Escribir por WhatsApp</a>
+    </div>
+  </section>
+
+  <footer>
+    El Socio · Colombia
+  </footer>
+
+</div>
+</body>
+</html>
