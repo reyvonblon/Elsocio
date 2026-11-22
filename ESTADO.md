@@ -11,8 +11,8 @@
 ## En prueba
 - Falta contraseña de aplicación de Gmail en `.env`.
 - Falta número real de WhatsApp en la landing.
-- Falta activar GitHub Pages en Settings → Pages del repo.
 - Falta programar la tarea diaria (cron/launchd) para que corra solo.
+- GitHub Pages activado (main → /docs): https://reyvonblon.github.io/Elsocio/
 
 ## Descartado
 - Calendly / login externo para agendar: Raymond solo quiere el Calendario local de Mac.
