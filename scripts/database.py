@@ -34,6 +34,11 @@ CREATE TABLE IF NOT EXISTS processed_replies (
     message_id TEXT PRIMARY KEY, sender_email TEXT, intent TEXT,
     snippet TEXT, processed_at TEXT
 );
+CREATE TABLE IF NOT EXISTS landing_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT UNIQUE, mensaje TEXT, estado TEXT DEFAULT 'nuevo',
+    received_at TEXT
+);
 """
 
 
@@ -111,6 +116,30 @@ def update_lead_stage(lead_id: int, stage: str, *, notes: str | None = None) -> 
             conn.execute("UPDATE leads SET stage=?, updated_at=? WHERE id=?", (stage, _now(), lead_id))
         row = conn.execute("SELECT * FROM leads WHERE id=?", (lead_id,)).fetchone()
         return dict(row) if row else None
+
+
+def has_landing_message(message_id: str) -> bool:
+    with _conn() as conn:
+        row = conn.execute("SELECT 1 FROM landing_messages WHERE message_id=?", (message_id,)).fetchone()
+        return row is not None
+
+
+def add_landing_message(message_id: str, mensaje: str) -> int:
+    with _conn() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO landing_messages (message_id, mensaje, estado, received_at) "
+            "VALUES (?, ?, 'nuevo', ?)",
+            (message_id, mensaje, _now()),
+        )
+        return int(cur.lastrowid)
+
+
+def list_landing_messages(limit: int = 50) -> list[dict]:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM landing_messages ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def mark_lead_bounced(email: str, reason: str = "") -> None:

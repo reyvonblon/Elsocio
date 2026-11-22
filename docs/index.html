@@ -224,6 +224,7 @@
 
 <script>
   const WHATSAPP_NUMBER = "573046090036";
+  const WEB3FORMS_ACCESS_KEY = "46d00c8d-fd0c-4d90-9309-dce17eedba23";
   const form = document.getElementById("contact-form");
   const textarea = document.getElementById("message");
 
@@ -231,6 +232,18 @@
     e.preventDefault();
     const text = textarea.value.trim();
     if (!text) return;
+
+    fetch("https://api.web3forms.com/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({
+        access_key: WEB3FORMS_ACCESS_KEY,
+        subject: "Nuevo mensaje — landing El Socio",
+        from_name: "Landing El Socio",
+        mensaje: text,
+      }),
+    }).catch(function () {});
+
     const url = "https://wa.me/" + WHATSAPP_NUMBER + "?text=" + encodeURIComponent(text);
     window.open(url, "_blank", "noopener");
   });

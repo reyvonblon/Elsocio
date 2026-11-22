@@ -71,13 +71,59 @@ def get_autopilot_status() -> dict[str, object]:
 
 
 def build_signature(cfg: dict[str, str]) -> str:
-    name = cfg.get("FROM_NAME", "El Socio")
-    lines = [f"\n\nSaludos,\n{name}"]
-    if cfg.get("WHATSAPP"):
-        lines.append(f"WhatsApp: {cfg['WHATSAPP']}")
-    if cfg.get("WEBSITE"):
-        lines.append(cfg["WEBSITE"])
+    name = cfg.get("FROM_NAME", "Raymond Vonblon — El Socio")
+    whatsapp = cfg.get("WHATSAPP") or "+57 304 609 0036"
+    website = cfg.get("WEBSITE") or "https://reyvonblon.github.io/Elsocio/"
+    lines = [f"\n\nSaludos,\n{name}", f"WhatsApp: {whatsapp}", website]
     return "\n".join(lines)
+
+
+def build_html_signature(cfg: dict[str, str]) -> str:
+    whatsapp_display = cfg.get("WHATSAPP") or "+57 304 609 0036"
+    whatsapp_digits = re.sub(r"\D", "", whatsapp_display)
+    if len(whatsapp_digits) == 10:
+        whatsapp_digits = f"57{whatsapp_digits}"
+    website = cfg.get("WEBSITE") or "https://reyvonblon.github.io/Elsocio/"
+    email_addr = cfg.get("SMTP_USER") or "elsociotuia@gmail.com"
+    logo_url = website.rstrip("/") + "/assets/logo-firma.png"
+    return (
+        '<table cellpadding="0" cellspacing="0" border="0" width="520" '
+        'style="border-collapse:collapse; font-family:Verdana, Geneva, sans-serif; color:#0a0a0a; font-size:13px; max-width:100%; margin-top:18px;">'
+        "<tbody><tr>"
+        '<td valign="middle" style="padding:0 16px 0 0; width:165px;">'
+        f'<a href="{html.escape(website)}" target="_blank" style="text-decoration:none; display:block;">'
+        f'<img src="{html.escape(logo_url)}" width="150" alt="El Socio" '
+        'style="display:block; width:150px; height:auto; border-radius:10px; border:0; background:#0a0a0a;" />'
+        "</a></td>"
+        '<td valign="top" style="border-left:2px solid #9c1c2e; padding:2px 0 2px 16px; line-height:1.4;">'
+        '<table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;"><tbody>'
+        '<tr><td style="padding:0 0 2px 0;">'
+        '<span style="font-size:17px; font-weight:700; color:#0a0a0a; letter-spacing:-0.2px;">Raymond Vonblon</span>'
+        "</td></tr>"
+        '<tr><td style="padding:0 0 8px 0; font-size:12.5px; color:#3f3f46; line-height:1.45;">'
+        'Fundador &middot; <strong style="color:#0a0a0a;">El Socio</strong> | Producci&oacute;n Visual &amp; Automatizaci&oacute;n<br />'
+        '<span style="color:#52525b;">&#x1F1E8;&#x1F1F4; Sabaneta &middot; Medell&iacute;n, Colombia</span>'
+        "</td></tr>"
+        '<tr><td style="padding:0 0 2px 0; font-size:12.5px;">'
+        f'<a href="https://wa.me/{whatsapp_digits}" target="_blank" style="color:#0a0a0a; text-decoration:none; font-weight:600;">{html.escape(whatsapp_display)}</a>'
+        '<span style="color:#a1a1aa;"> &middot; </span>'
+        f'<a href="mailto:{html.escape(email_addr)}" style="color:#0a0a0a; text-decoration:none;">{html.escape(email_addr)}</a>'
+        "</td></tr>"
+        '<tr><td style="padding:9px 0 0 0;">'
+        '<table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;"><tbody><tr>'
+        '<td style="padding:0 6px 0 0;">'
+        f'<a href="https://wa.me/{whatsapp_digits}" target="_blank" '
+        'style="display:inline-block; background:#0a0a0a; color:#ffffff; font-size:11px; font-weight:700; text-decoration:none; padding:5px 10px; border-radius:6px; font-family:Verdana, Geneva, sans-serif;">WhatsApp</a>'
+        "</td>"
+        '<td style="padding:0;">'
+        f'<a href="{html.escape(website)}" target="_blank" '
+        'style="display:inline-block; background:#9c1c2e; color:#ffffff; font-size:11px; font-weight:700; text-decoration:none; padding:5px 10px; border-radius:6px; font-family:Verdana, Geneva, sans-serif;">Sitio Web</a>'
+        "</td>"
+        "</tr></tbody></table>"
+        "</td></tr>"
+        "</tbody></table>"
+        "</td></tr></tbody></table>"
+    )
 
 
 def send_smtp_email(cfg: dict[str, str], to_addr: str, subject: str, body: str, *, include_signature: bool = True) -> None:
@@ -87,6 +133,16 @@ def send_smtp_email(cfg: dict[str, str], to_addr: str, subject: str, body: str, 
     msg["Subject"] = subject
     full_body = body + (build_signature(cfg) if include_signature else "")
     msg.set_content(full_body)
+
+    if include_signature:
+        body_html = "<br />".join(html.escape(line) for line in body.splitlines())
+        html_doc = (
+            '<!DOCTYPE html><html lang="es"><body style="margin:0; padding:0; font-family:Verdana, Geneva, sans-serif; font-size:14px; color:#18181b; line-height:1.55;">'
+            f"<div>{body_html}</div>"
+            f"{build_html_signature(cfg)}"
+            "</body></html>"
+        )
+        msg.add_alternative(html_doc, subtype="html")
 
     port = int(cfg.get("SMTP_PORT") or "587")
     host = cfg["SMTP_HOST"]
@@ -443,10 +499,63 @@ def sync_imap_replies(max_messages: int = 40) -> dict[str, object]:
         return {"imap_ready": True, "checked": checked, "matched": matched, "interested": interested}
 
 
+def sync_landing_messages(max_messages: int = 40) -> dict[str, object]:
+    with _DISPATCH_LOCK:
+        database.init_db()
+        cfg = load_env_file()
+        user, password = cfg.get("SMTP_USER", ""), cfg.get("SMTP_PASS", "")
+        imap_host = cfg.get("IMAP_HOST") or ("imap.gmail.com" if "gmail" in (cfg.get("SMTP_HOST") or "").lower() else "")
+        if not (user and password and imap_host):
+            return {"imap_ready": False, "checked": 0, "new_messages": 0}
+
+        checked, new_messages = 0, 0
+        try:
+            with imaplib.IMAP4_SSL(imap_host, 993, timeout=15) as imap:
+                imap.login(user, password)
+                imap.select("INBOX")
+                status_code, data = imap.search(None, 'FROM', '"web3forms.com"')
+                if status_code != "OK" or not data or not data[0]:
+                    return {"imap_ready": True, "checked": 0, "new_messages": 0}
+                msg_ids = data[0].split()[-max_messages:]
+                for msg_num in reversed(msg_ids):
+                    checked += 1
+                    st, msg_data = imap.fetch(msg_num, "(RFC822)")
+                    if st != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
+                        continue
+                    msg = email.message_from_bytes(msg_data[0][1])
+                    msg_id = (msg.get("Message-ID") or "").strip() or f"imap-{msg_num.decode(errors='ignore')}"
+                    if database.has_landing_message(msg_id):
+                        continue
+
+                    snippet = _extract_text_snippet(msg)
+                    mensaje = snippet
+                    match = re.search(r"(?im)^mensaje[:\s]+(.*)", snippet)
+                    if match:
+                        mensaje = match.group(1).strip()
+
+                    database.add_landing_message(msg_id, mensaje)
+                    new_messages += 1
+
+                    notify_mac_desktop(
+                        "💬 Nuevo mensaje en la landing de El Socio",
+                        mensaje[:180],
+                    )
+                    create_calendar_event(
+                        "📩 Revisar mensaje de la landing (El Socio)",
+                        f"Mensaje recibido por la landing:\n\n{mensaje}",
+                        datetime.now() + timedelta(hours=1),
+                    )
+        except Exception as exc:
+            return {"imap_ready": True, "error": str(exc), "checked": checked, "new_messages": new_messages}
+
+        return {"imap_ready": True, "checked": checked, "new_messages": new_messages}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Dispatch due El Socio emails & sync replies.")
     parser.add_argument("--status-only", action="store_true")
     parser.add_argument("--sync-replies", action="store_true")
+    parser.add_argument("--sync-landing", action="store_true")
     parser.add_argument("--replenish", action="store_true")
     args = parser.parse_args()
 
@@ -455,7 +564,12 @@ def main() -> None:
         print(json.dumps({"config_status": get_autopilot_status(), "pending_jobs": len(database.list_outbox_jobs(status="pending"))}, ensure_ascii=False, indent=2))
         return
     if args.sync_replies:
-        print(json.dumps(sync_imap_replies(), ensure_ascii=False, indent=2))
+        replies_res = sync_imap_replies()
+        replies_res["landing"] = sync_landing_messages()
+        print(json.dumps(replies_res, ensure_ascii=False, indent=2))
+        return
+    if args.sync_landing:
+        print(json.dumps(sync_landing_messages(), ensure_ascii=False, indent=2))
         return
     if args.replenish:
         print(json.dumps(ensure_daily_pipeline(force=True), ensure_ascii=False, indent=2))

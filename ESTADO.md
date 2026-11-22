@@ -5,13 +5,13 @@
 - 2 nichos de arranque: modelado-3d-espacios, fichas-tecnicas-ropa. Sistema abierto a cualquier nicho nuevo (`nuevo-nicho.md`).
 - 5 skills de calidad (humanizer, pensamiento-critico, psicologia-y-estatus, inteligencia-competitiva, editor-implacable).
 - Creación real de eventos en Calendar.app vía AppleScript cuando un lead responde interesado (probado, funciona).
-- Landing `docs/index.html`: solo logo + caja de texto ("Escribe lo que necesitas...") que abre WhatsApp con el mensaje listo. Backend = WhatsApp (sin servicios externos). Repo: github.com/reyvonblon/Elsocio.git.
+- Landing `docs/index.html`: solo logo + caja de texto ("Escribe lo que necesitas..."). Al enviar: abre WhatsApp con el mensaje Y manda copia silenciosa por Web3Forms a elsociotuia@gmail.com. Repo: github.com/reyvonblon/Elsocio.git.
+- Backend de la landing: `sync_landing_messages()` en `autopilot_dispatcher.py` lee esos correos por IMAP, los guarda en tabla `landing_messages` (SQLite), notifica en el Mac y crea evento en Calendar. Manejado 100% por El Socio, sin dashboards ni pasos manuales de Raymond.
 - Gmail dedicado: elsociotuia@gmail.com.
 
 ## En prueba
-- Falta contraseña de aplicación de Gmail en `.env`.
-- Falta número real de WhatsApp en la landing.
-- Falta programar la tarea diaria (cron/launchd) para que corra solo.
+- Falta contraseña de aplicación de Gmail en `.env` — SIN esto, `sync_landing_messages` no puede leer los mensajes de la landing (el correo llega pero nadie lo recoge).
+- Falta programar la tarea diaria (cron/launchd) para que `--sync-replies` (que ya incluye el chequeo de landing) corra solo.
 - GitHub Pages activado (main → /docs): https://reyvonblon.github.io/Elsocio/
 
 ## Descartado
