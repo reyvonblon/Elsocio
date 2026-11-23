@@ -70,9 +70,11 @@ def _tiene_anthropic_key(cfg: dict[str, str] | None = None) -> bool:
 
 # Etapas en las que un lead no vuelve a recibir nada, ni del agente ni del dispatcher.
 ETAPAS_CERRADAS = ("baja", "no_interesado")
-# Respuestas que sí justifican una corrida del agente. Nunca ante una baja, un "no
-# interesado" o un autorespondedor: ahí gastar un token no tiene sentido.
-INTENTS_PARA_EL_AGENTE = ("interesado_cita", "respuesta_recibida")
+# La ÚNICA respuesta que justifica quemar saldo del agente. `respuesta_recibida` es el
+# cajón del ruido de bandeja ("ok", "recibido", facturas, reenvíos): con 3 USD de saldo
+# total, contestar ese ruido con el modelo es tirar el dinero. Si una señal de compra
+# real cae ahí, el arreglo es agregarla a `positive_kw`, no abrir la puerta al ruido.
+INTENTS_PARA_EL_AGENTE = ("interesado_cita",)
 
 
 def _lead_esta_cerrado(lead: dict | None) -> bool:
@@ -84,6 +86,134 @@ def _lead_esta_cerrado(lead: dict | None) -> bool:
         return int(lead.get("bounced") or 0) == 1
     except (TypeError, ValueError):
         return False
+
+
+# ------------------------------------------------- registro real en RESULTADOS_MERCADO.md
+
+RESULTADOS_FILE = PROJECT_ROOT / "contexto" / "RESULTADOS_MERCADO.md"
+# Las dos listas cerradas que declara el propio RESULTADOS_MERCADO.md en su sección Formato.
+CANALES_VALIDOS = ("correo", "whatsapp-negocio", "landing", "instagram", "llamada")
+RESULTADOS_VALIDOS = ("respondió", "agendó", "silencio", "rebote", "baja")
+# Se acepta la forma sin acento y se escribe siempre la canónica, para que la tabla no
+# acabe con "respondio" y "respondió" como si fueran dos resultados distintos.
+_ALIAS_RESULTADOS = {
+    "respondio": "respondió", "respondió": "respondió",
+    "agendo": "agendó", "agendó": "agendó",
+    "silencio": "silencio", "rebote": "rebote", "baja": "baja",
+}
+# Una tanda enviada no es "silencio" el mismo día: nadie tuvo tiempo de contestar.
+DIAS_PARA_SILENCIO = 7
+
+
+def _celda_markdown(texto: object, limite: int = 200) -> str:
+    """Celda que no puede romper la tabla: sin '|', sin barras invertidas, sin saltos."""
+    crudo = "" if texto is None else str(texto)
+    crudo = crudo.replace("|", "/").replace("\\", "/")
+    crudo = re.sub(r"\s+", " ", crudo).strip()
+    return crudo[:limite] or "(sin dato)"
+
+
+def registrar_resultado_mercado(
+    nicho: str, angulo: str, canal: str, cantidad: int, resultado: str, nota: str = "",
+    *, ruta: Path | None = None, dry_run: bool = False,
+) -> dict[str, object]:
+    """Agrega UNA fila real al final de `contexto/RESULTADOS_MERCADO.md`.
+
+    Solo se llama con eventos que de verdad pasaron en la corrida (una respuesta que
+    llegó, un rebote que el servidor devolvió, una tanda que ya venció sin respuesta).
+    Nunca inventa cifras ni rellena huecos.
+
+    - Valida `canal` y `resultado` contra las listas del propio archivo.
+    - Sanitiza cada celda: un '|' o un salto de línea romperían la tabla para siempre.
+    - Append EXCLUSIVAMENTE al final (la regla del archivo es "Nada debajo de la tabla").
+      No reescribe, no reordena y no borra ninguna fila que ya esté.
+    - `dry_run=True` devuelve la fila que escribiría y no toca el disco.
+
+    `ruta` se resuelve en tiempo de ejecución (no como valor por defecto) para que las
+    pruebas puedan apuntar a un archivo temporal sin tocar el archivo real.
+    """
+    ruta = RESULTADOS_FILE if ruta is None else Path(ruta)
+
+    canal_limpio = _celda_markdown(canal, 40).lower()
+    if canal_limpio not in CANALES_VALIDOS:
+        return {"escrito": False, "error": f"canal inválido: '{canal_limpio}'"}
+
+    resultado_limpio = _ALIAS_RESULTADOS.get(_celda_markdown(resultado, 40).lower(), "")
+    if resultado_limpio not in RESULTADOS_VALIDOS:
+        return {"escrito": False, "error": f"resultado inválido: '{_celda_markdown(resultado, 40)}'"}
+
+    try:
+        n = int(cantidad)
+    except (TypeError, ValueError):
+        return {"escrito": False, "error": "cantidad no es un número"}
+    if n <= 0:
+        return {"escrito": False, "error": "cantidad tiene que ser 1 o más"}
+
+    fila = "| {} | {} | {} | {} | {} | {} | {} |".format(
+        datetime.now().strftime("%Y-%m-%d"),
+        _celda_markdown(nicho, 60),
+        _celda_markdown(angulo, 120),
+        canal_limpio, n, resultado_limpio,
+        _celda_markdown(nota, 220),
+    )
+
+    if dry_run:
+        return {"escrito": False, "dry_run": True, "fila": fila}
+    if not ruta.exists():
+        return {"escrito": False, "error": f"no existe {ruta.name}"}
+
+    try:
+        actual = ruta.read_text(encoding="utf-8")
+        salto = "" if (not actual or actual.endswith("\n")) else "\n"
+        with ruta.open("a", encoding="utf-8") as fh:
+            fh.write(salto + fila + "\n")
+    except OSError as exc:
+        return {"escrito": False, "error": str(exc)[:200]}
+    return {"escrito": True, "fila": fila}
+
+
+def _eventos_ya_registrados(ruta: Path) -> set[str]:
+    """Marcas `[tanda <dia> / <nicho>]` que ya están en el archivo, para no duplicar."""
+    if not ruta.exists():
+        return set()
+    try:
+        # El grupo captura la marca COMPLETA ("tanda <dia> / <nicho>"), tal como se escribe.
+        return set(re.findall(r"\[(tanda [^\]]+)\]", ruta.read_text(encoding="utf-8")))
+    except OSError:
+        return set()
+
+
+def registrar_silencios_vencidos(
+    *, dias: int = DIAS_PARA_SILENCIO, ruta: Path | None = None, dry_run: bool = False,
+) -> dict[str, object]:
+    """Registra como `silencio` las tandas realmente enviadas hace `dias` o más en las
+    que nadie respondió, con el conteo real de correos de esa tanda.
+
+    El silencio se escribe con plazo cumplido, nunca el día del envío. El archivo es su
+    propia memoria: cada fila lleva la marca `[tanda <dia> / <nicho>]` y una marca que ya
+    está no se vuelve a escribir.
+    """
+    ruta = RESULTADOS_FILE if ruta is None else Path(ruta)
+    if not database.DB_PATH.exists():
+        return {"registradas": 0, "razon": "sin_bd"}
+
+    ya_estan = _eventos_ya_registrados(ruta)
+    registradas, filas = 0, []
+    for tanda in database.summarize_silent_sent_batches(dias=dias):
+        marca = f"tanda {tanda['dia']} / {tanda['nicho']}"
+        if marca in ya_estan:
+            continue
+        res = registrar_resultado_mercado(
+            tanda["nicho"], "(ángulo no registrado por tanda)", "correo",
+            int(tanda["cantidad"]), "silencio",
+            f"[{marca}] Enviados reales sin ninguna respuesta tras {dias} días.",
+            ruta=ruta, dry_run=dry_run,
+        )
+        if res.get("escrito") or res.get("dry_run"):
+            registradas += 1
+            filas.append(res.get("fila", ""))
+        ya_estan.add(marca)
+    return {"registradas": registradas, "dry_run": dry_run, "filas": filas}
 
 
 def get_daily_limit(cfg: dict[str, str]) -> int:
@@ -268,6 +398,25 @@ def ensure_daily_pipeline(*, force: bool = False) -> dict[str, object]:
     }
 
 
+# Errores de SMTP que significan "esta dirección no existe", no "reintenta más tarde".
+_RE_REBOTE_PERMANENTE = re.compile(
+    r"5\.1\.[0-9]|\b55[0-3]\b|user\s+unknown|no\s+such\s+user|does\s+not\s+exist|"
+    r"address\s+rejected|recipient\s+rejected|mailbox\s+unavailable|invalid\s+recipient",
+    re.IGNORECASE,
+)
+
+
+def _es_rebote_permanente(exc: Exception) -> bool:
+    """True solo ante un rechazo DEFINITIVO del destinatario. Un timeout, una caída de
+    red o un 4xx temporal no son un rebote: ahí el correo se reintenta, no se quema el lead.
+    """
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        return True
+    if isinstance(exc, smtplib.SMTPResponseException) and 500 <= int(exc.smtp_code or 0) < 600:
+        return bool(_RE_REBOTE_PERMANENTE.search(f"{exc.smtp_code} {exc.smtp_error}"))
+    return bool(_RE_REBOTE_PERMANENTE.search(str(exc)))
+
+
 def dispatch_due_jobs(*, respect_pacing: bool = False, respect_window: bool = False) -> dict:
     with _DISPATCH_LOCK:
         database.init_db()
@@ -281,6 +430,7 @@ def dispatch_due_jobs(*, respect_pacing: bool = False, respect_window: bool = Fa
         sent_count = 0
         skipped_no_creds = skipped_daily_cap = skipped_pacing = skipped_window = failed_count = 0
         cancelled_closed_lead = 0
+        bounced_count = 0
 
         try:
             min_gap_sec = max(30, int(settings.get("autopilot_min_gap_seconds", "180")))
@@ -326,13 +476,26 @@ def dispatch_due_jobs(*, respect_pacing: bool = False, respect_window: bool = Fa
             except Exception as exc:
                 database.update_outbox_job(job["id"], "failed", str(exc))
                 failed_count += 1
+                # Rechazo permanente del destinatario = rebote REAL. Hasta ahora quedaba
+                # solo como 'failed' y el lead seguía recibiendo correos.
+                if _es_rebote_permanente(exc):
+                    database.mark_lead_bounced(job["recipient"], str(exc)[:200])
+                    bounced_count += 1
+                    try:
+                        registrar_resultado_mercado(
+                            job.get("nicho") or "(sin nicho)", "(rebote, ángulo no registrado)",
+                            "correo", 1, "rebote",
+                            f"Rebote real de {job['recipient']}: {str(exc)[:120]}",
+                        )
+                    except Exception:
+                        pass
 
         status["sent_today"] = sent_today
         return {
             "config_status": status, "sent": sent_count,
             "skipped_missing_credentials": skipped_no_creds, "skipped_daily_cap": skipped_daily_cap,
             "skipped_pacing": skipped_pacing, "skipped_window": skipped_window, "failed": failed_count,
-            "cancelled_closed_lead": cancelled_closed_lead,
+            "cancelled_closed_lead": cancelled_closed_lead, "bounced": bounced_count,
         }
 
 
@@ -475,6 +638,10 @@ def classify_reply_intent(subject: str, body: str, headers: dict[str, str] | Non
         "cita", "reunión", "reunion", "agendar", "llamada", "interesado", "interesada",
         "interesa", "con gusto", "cotización", "cotizacion", "propuesta", "hablemos",
         "conversemos", "whatsapp", "teléfono", "telefono", "sí claro", "si claro",
+        # Señales de compra que antes caían en `respuesta_recibida` y el agente nunca veía.
+        "cuánto cuesta", "cuanto cuesta", "cuánto vale", "cuanto vale", "precio", "precios",
+        "cuéntame", "cuentame", "ejemplos", "más información", "mas informacion",
+        "necesito", "me puedes ayudar", "pueden hacer",
     )
     if any(kw in clean_body for kw in positive_kw):
         return "interesado_cita"
@@ -482,8 +649,17 @@ def classify_reply_intent(subject: str, body: str, headers: dict[str, str] | Non
 
 
 def sync_imap_replies(max_messages: int = 40, *, dry_run: bool = False) -> dict[str, object]:
+    """Lee la bandeja, clasifica y actúa. En `dry_run` NO escribe en la BD, no notifica,
+    no toca Calendar y no registra nada en RESULTADOS_MERCADO.md: solo mira y cuenta.
+    """
     with _DISPATCH_LOCK:
-        database.init_db()
+        if dry_run:
+            # En seco nunca se crea la BD: sin BD no hay leads que mirar.
+            if not database.DB_PATH.exists():
+                return {"imap_ready": False, "dry_run": True, "reason": "dry_run_sin_bd",
+                        "checked": 0, "matched": 0, "interested": []}
+        else:
+            database.init_db()
         cfg = load_env_file()
         user, password = cfg.get("SMTP_USER", ""), cfg.get("SMTP_PASS", "")
         imap_host = cfg.get("IMAP_HOST") or ("imap.gmail.com" if "gmail" in (cfg.get("SMTP_HOST") or "").lower() else "")
@@ -523,8 +699,20 @@ def sync_imap_replies(max_messages: int = 40, *, dry_run: bool = False) -> dict[
 
                     hdrs = {"Auto-Submitted": msg.get("Auto-Submitted") or "", "Precedence": msg.get("Precedence") or ""}
                     intent = classify_reply_intent(subj, snippet, headers=hdrs)
-                    database.record_processed_reply(msg_id, sender_email, intent, snippet)
                     matched += 1
+
+                    if dry_run:
+                        # Solo mirar: ni la respuesta se marca como procesada, ni el lead
+                        # cambia de etapa, ni se cancela nada, ni suena el Mac.
+                        if intent == "interesado_cita":
+                            interested.append({
+                                "id": str(lead["id"]), "name": lead.get("name") or "",
+                                "company": lead.get("company") or "", "email": sender_email,
+                                "snippet": snippet[:180],
+                            })
+                        continue
+
+                    database.record_processed_reply(msg_id, sender_email, intent, snippet)
 
                     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
                     new_note = f"[Respuesta {stamp} | {intent}] Asunto: {subj} — {snippet[:260]}"
@@ -536,6 +724,21 @@ def sync_imap_replies(max_messages: int = 40, *, dry_run: bool = False) -> dict[
                     # ni correos pendientes ni seguimientos del agente.
                     database.cancel_pending_outbox_for_recipient(sender_email)
                     database.cancel_followups_for_lead(lead["id"])
+
+                    # Dato REAL para RESULTADOS_MERCADO.md: esta respuesta existe de verdad.
+                    # El duplicado ya lo corta `has_processed_reply(msg_id)` arriba: un
+                    # mismo message_id no vuelve a llegar hasta aquí nunca.
+                    if intent in ("interesado_cita", "baja"):
+                        try:
+                            registrar_resultado_mercado(
+                                lead.get("nicho") or "(sin nicho)",
+                                "(respuesta entrante, ángulo no registrado)",
+                                "correo", 1,
+                                "respondió" if intent == "interesado_cita" else "baja",
+                                f"Respuesta real de {sender_email}. Asunto: {subj}",
+                            )
+                        except Exception:
+                            pass
 
                     if intent == "interesado_cita" and updated_lead:
                         interested.append({
@@ -590,14 +793,16 @@ def run_sales_agent_cycle(*, dry_run: bool = False, max_leads: int = 5) -> dict[
     if dry_run and not database.DB_PATH.exists():
         return {"ran": False, "reason": "dry_run_sin_bd", "dry_run": True}
 
-    database.init_db()
-    if not dry_run and not _is_within_sending_window(database.get_settings()):
-        return {"ran": False, "reason": "outside_window"}
+    # En seco NO se llama init_db(): crear o abrir la BD para escribir ya sería tocarla.
+    if not dry_run:
+        database.init_db()
+        if not _is_within_sending_window(database.get_settings()):
+            return {"ran": False, "reason": "outside_window"}
 
     conf = agente.leer_configuracion(cfg)
     resumen: dict[str, object] = {
         "ran": True, "dry_run": dry_run, "followups_corridos": 0, "followups_cancelados": 0,
-        "leads_en_frio": 0, "cortado_por": "", "errores": [],
+        "followups_fallidos": 0, "leads_en_frio": 0, "cortado_por": "", "errores": [],
     }
 
     def _tope_lleno() -> str:
@@ -607,12 +812,17 @@ def run_sales_agent_cycle(*, dry_run: bool = False, max_leads: int = 5) -> dict[
             return "tope_usd"
         return ""
 
-    def _correr(lead: dict, mensaje: str = "") -> bool:
+    def _correr(lead: dict, mensaje: str = "", motivo_seguimiento: str = "") -> bool:
+        """False si el agente NO pudo trabajar (error de API, tope, lead cerrado).
+        Importa: con False el seguimiento sigue 'pendiente' y se reintenta, en vez de
+        darse por 'hecho' sin que el lead haya recibido nada.
+        """
         try:
-            agente.AgenteVentas(cfg, dry_run=dry_run).correr(
-                lead_email=lead["email"], mensaje_lead=mensaje, nicho=lead.get("nicho") or "",
+            res = agente.AgenteVentas(cfg, dry_run=dry_run).correr(
+                lead_email=lead["email"], mensaje_lead=mensaje,
+                nicho=lead.get("nicho") or "", motivo_seguimiento=motivo_seguimiento,
             )
-            return True
+            return bool(res.get("ok")) if isinstance(res, dict) else bool(res)
         except Exception as exc:
             resumen["errores"].append(str(exc)[:200])
             return False
@@ -629,10 +839,13 @@ def run_sales_agent_cycle(*, dry_run: bool = False, max_leads: int = 5) -> dict[
         if corte:
             resumen["cortado_por"] = corte
             break
-        if _correr(lead):
+        if _correr(lead, motivo_seguimiento=str(seg.get("motivo") or "")):
             resumen["followups_corridos"] = int(resumen["followups_corridos"]) + 1
             if not dry_run:
                 database.update_followup(seg["id"], "hecho")
+        else:
+            # Se queda 'pendiente' a propósito: el agente no pudo escribirle.
+            resumen["followups_fallidos"] = int(resumen.get("followups_fallidos", 0)) + 1
 
     # 2) leads nuevos en frío, hasta max_leads y cortando en seco ante cualquier tope.
     if not resumen["cortado_por"]:
@@ -700,6 +913,42 @@ def sync_landing_messages(max_messages: int = 40) -> dict[str, object]:
         return {"imap_ready": True, "checked": checked, "new_messages": new_messages}
 
 
+def resumen_en_seco() -> dict[str, object]:
+    """Lo ÚNICO que corre `--dry-run` a secas: mira y cuenta.
+
+    No rellena la cola, no abre SMTP, no toca la landing, no notifica, no crea la BD y
+    no escribe una sola fila en RESULTADOS_MERCADO.md.
+    """
+    cfg = load_env_file()
+    hay_bd = database.DB_PATH.exists()
+    salida: dict[str, object] = {
+        "dry_run": True,
+        "nota": ("--dry-run solo mira: sin escribir en la BD, sin SMTP, sin IMAP, "
+                 "sin notificaciones, sin Calendar y sin tocar RESULTADOS_MERCADO.md."),
+        "bd_existe": hay_bd,
+        "smtp_listo": bool(cfg.get("SMTP_HOST") and cfg.get("SMTP_USER") and cfg.get("SMTP_PASS")),
+        "imap_listo": bool(cfg.get("SMTP_USER") and cfg.get("SMTP_PASS")
+                           and (cfg.get("IMAP_HOST") or "gmail" in (cfg.get("SMTP_HOST") or "").lower())),
+        "api_key_lista": _tiene_anthropic_key(cfg),
+    }
+    if not hay_bd:
+        return salida
+    ajustes = database.get_settings()
+    salida.update({
+        "limite_diario": get_daily_limit(cfg),
+        "en_ventana_de_envio": _is_within_sending_window(ajustes),
+        "enviados_hoy": database.count_sent_emails_today(),
+        "pendientes_en_cola": len(database.list_outbox_jobs(status="pending")),
+        "pendientes_de_hoy": database.count_today_pending_email_jobs(),
+        "leads_en_frio_disponibles": len(database.list_cold_leads_for_agent(limit=100)),
+        "seguimientos_vencidos": len(database.list_due_followups(limit=100)),
+        "correos_del_agente_hoy": database.agent_emails_queued_today(),
+        "gasto_del_agente_hoy_usd": round(database.agent_cost_today_usd(), 6),
+        "silencios_por_registrar": registrar_silencios_vencidos(dry_run=True),
+    })
+    return salida
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Dispatch due El Socio emails & sync replies.")
     parser.add_argument("--status-only", action="store_true")
@@ -711,18 +960,31 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true",
                         help="Valida sin escribir en la BD, sin API y sin enviar correos.")
     args = parser.parse_args()
+    seco = args.dry_run
 
-    # Con --run-agent --dry-run no se crea la BD: el objetivo es no tocar nada.
-    if not (args.run_agent and args.dry_run):
+    # En seco NUNCA se crea la BD ni se abre para escribir: el objetivo es no tocar nada.
+    if not seco:
         database.init_db()
+
     if args.run_agent:
-        print(json.dumps(run_sales_agent_cycle(dry_run=args.dry_run), ensure_ascii=False, indent=2))
+        print(json.dumps(run_sales_agent_cycle(dry_run=seco), ensure_ascii=False, indent=2))
         return
     if args.status_only:
+        if seco and not database.DB_PATH.exists():
+            print(json.dumps({"dry_run": True, "bd_existe": False}, ensure_ascii=False, indent=2))
+            return
         print(json.dumps({"config_status": get_autopilot_status(), "pending_jobs": len(database.list_outbox_jobs(status="pending"))}, ensure_ascii=False, indent=2))
         return
+    if seco:
+        # `--dry-run` sin `--run-agent`: ni ensure_daily_pipeline, ni dispatch_due_jobs,
+        # ni sync_landing_messages. Todos esos escriben de verdad y mandan de verdad.
+        if args.sync_replies:
+            print(json.dumps(sync_imap_replies(dry_run=True), ensure_ascii=False, indent=2))
+            return
+        print(json.dumps(resumen_en_seco(), ensure_ascii=False, indent=2))
+        return
     if args.sync_replies:
-        replies_res = sync_imap_replies(dry_run=args.dry_run)
+        replies_res = sync_imap_replies()
         replies_res["landing"] = sync_landing_messages()
         print(json.dumps(replies_res, ensure_ascii=False, indent=2))
         return
@@ -739,9 +1001,14 @@ def main() -> None:
     # El agente solo entra si hay API key. Si falta, el motor de siempre no se entera.
     if _tiene_anthropic_key():
         try:
-            dispatch_res["sales_agent"] = run_sales_agent_cycle(dry_run=args.dry_run)
+            dispatch_res["sales_agent"] = run_sales_agent_cycle()
         except Exception as exc:
             dispatch_res["sales_agent"] = {"ran": False, "error": str(exc)[:200]}
+    # Tandas que ya vencieron sin respuesta: dato real para RESULTADOS_MERCADO.md.
+    try:
+        dispatch_res["resultados_mercado"] = registrar_silencios_vencidos()
+    except Exception as exc:
+        dispatch_res["resultados_mercado"] = {"registradas": 0, "error": str(exc)[:200]}
     print(json.dumps(dispatch_res, ensure_ascii=False, indent=2))
 
 

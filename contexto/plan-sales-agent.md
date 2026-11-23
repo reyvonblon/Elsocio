@@ -63,7 +63,9 @@ Nunca lee `contexto/precios-del-dueño.md`. Prompt Caching activo:
    API, guarda de precios y links (bloqueados y legítimos), línea de baja automática, duplicados del
    mismo día con mayúsculas, cancelación al dar de baja, leads cerrados/rebotados, topes de 15 correos
    y 0.50 USD verificados antes de la API, corte duro en 6 turnos y 2 reintentos con pausa ante 429.
-   Se corre con `python3 scripts/test_sales_agent.py`. Hoy son 68 pruebas en verde.
+   Se corre con `python3 scripts/test_sales_agent.py`. Hoy son 128 pruebas en verde.
+   La BD temporal y un `RESULTADOS_MERCADO.md` temporal son obligatorios: cada prueba
+   verifica al terminar que no tocó ni `data/el_socio.db` ni el archivo real.
 5. [hecho] Enganche en `autopilot_dispatcher.py`:
    - `classify_reply_intent()` devuelve `baja` cuando el cuerpo limpio dispara `pide_la_baja()`
      (después del filtro de autorespondedores: un pie con "unsubscribe" no es una baja).
@@ -78,4 +80,42 @@ Nunca lee `contexto/precios-del-dueño.md`. Prompt Caching activo:
      rebotó se marca `cancelled` y NO se envía, aunque ya estuviera en la cola.
    - Flags nuevos: `--run-agent` y `--dry-run`. El `main()` normal corre el ciclo solo si hay
      `ANTHROPIC_API_KEY`, y si falta no rompe nada.
-6. [pendiente] Escritura automática en `contexto/RESULTADOS_MERCADO.md`.
+6. [hecho] Escritura automática en `contexto/RESULTADOS_MERCADO.md`:
+   - `registrar_resultado_mercado(nicho, angulo, canal, cantidad, resultado, nota, *, ruta, dry_run)`
+     en `autopilot_dispatcher.py`. Valida canal (correo / whatsapp-negocio / landing / instagram /
+     llamada) y resultado (respondió / agendó / silencio / rebote / baja) contra las listas del
+     propio archivo, sanitiza `|`, barras invertidas y saltos de línea (la tabla no se puede
+     romper), exige `cantidad >= 1`, y hace append SOLO al final ("Nada debajo de la tabla").
+     Nunca reescribe ni borra una fila existente. `dry_run=True` devuelve la fila y no toca disco.
+     `ruta` se resuelve en tiempo de ejecución para que las pruebas usen un archivo temporal.
+   - Se registra SOLO lo que pasó de verdad en la corrida:
+     · respuesta real `interesado_cita` → `respondió`; `baja` → `baja` (cantidad 1, canal correo).
+       El duplicado lo corta `has_processed_reply(message_id)`: un mismo correo no llega dos veces.
+     · rebote real: `dispatch_due_jobs()` detecta el rechazo permanente del destinatario
+       (`_es_rebote_permanente`: SMTPRecipientsRefused, 5xx con "user unknown" y compañía), marca
+       `mark_lead_bounced()` y registra `rebote`. Un timeout o un 4xx NO es rebote.
+     · silencio: `registrar_silencios_vencidos()` + `database.summarize_silent_sent_batches()`.
+       Una tanda se registra como `silencio` a los 7 días, con el conteo real de enviados que
+       nunca respondieron. Nunca el día del envío: ese día nadie tuvo tiempo de contestar.
+       El propio archivo es la memoria anti-duplicados: marca `[tanda <día> / <nicho>]` por fila.
+
+## Los 4 hallazgos de la auditoría del Paso 5 (corregidos)
+- **Spam diario en frío:** `list_cold_leads_for_agent()` filtraba solo `created_at LIKE hoy`, así
+  que un lead contactado ayer volvía a salir en frío cada mañana. Ahora excluye cualquier
+  `LOWER(TRIM(recipient))` con outbox en `pending`/`sent`, sin filtro de fecha: contactado una vez
+  en frío = nunca más por esa puerta. Los recontactos van solo por `agent_followups`. Además,
+  `enviar_correo` en frío mueve el lead de `nuevo_lead` a `contactado` en CÓDIGO al encolar.
+- **`--dry-run` del motor:** `autopilot_dispatcher.py --dry-run` (sin `--run-agent`) ya no llama a
+  `ensure_daily_pipeline()`, `dispatch_due_jobs()` ni `sync_landing_messages()`: solo imprime
+  `resumen_en_seco()`. En seco nunca se llama `database.init_db()` (ni en `run_sales_agent_cycle`),
+  y `sync_imap_replies(dry_run=True)` no escribe en la BD, no cancela nada, no notifica, no crea
+  eventos en Calendar y no registra filas de mercado.
+- **Seguimientos:** `_correr()` devuelve `bool(res.get("ok"))`. Si el agente falla (API o tope), el
+  seguimiento se queda `pendiente` y se reintenta — antes se marcaba `hecho` sin que el lead
+  recibiera nada. `correr()` acepta `motivo_seguimiento` y, cuando viene, el contexto le dice al
+  modelo que es un SEGUIMIENTO programado (con el motivo) y NO un primer contacto en frío. La
+  línea de baja se le sigue agregando igual.
+- **Saldo de 3 USD:** `INTENTS_PARA_EL_AGENTE = ("interesado_cita",)` — el ruido de bandeja
+  (`respuesta_recibida`: "ok", facturas, reenvíos) ya no quema saldo. Para no perder compradores
+  reales en ese cajón, `positive_kw` ahora incluye "cuánto cuesta/vale", "precio(s)", "cuéntame",
+  "ejemplos", "más información", "necesito", "me puedes ayudar" y "pueden hacer".

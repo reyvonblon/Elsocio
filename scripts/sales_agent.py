@@ -638,6 +638,12 @@ class AgenteVentas:
         self._log("enviar_correo", argumentos=json.dumps({"asunto": asunto}, ensure_ascii=False),
                   resultado=f"encolado job {job_id}")
         self.acciones.append(f"correo encolado (job {job_id}) a {destinatario}")
+        # Contactado en frío = ya no es un lead nuevo. Lo mueve el CÓDIGO, no el modelo:
+        # si se deja en 'nuevo_lead', mañana vuelve a salir en la lista de contacto en frío.
+        if es_frio and str((self.lead or {}).get("stage") or "") == "nuevo_lead" and self.lead.get("id"):
+            database.update_lead_stage(self.lead["id"], "contactado")
+            self.lead["stage"] = "contactado"
+            self.acciones.append("etapa automática: nuevo_lead -> contactado")
         return True, f"Correo encolado (id {job_id}). Lo manda el motor respetando horario y tope."
 
     def _tool_programar_seguimiento(self, args: dict) -> tuple[bool, str]:
@@ -769,7 +775,8 @@ class AgenteVentas:
 
     # --- loop -----------------------------------------------------------
 
-    def correr(self, *, lead_email: str, mensaje_lead: str = "", nicho: str = "") -> dict:
+    def correr(self, *, lead_email: str, mensaje_lead: str = "", nicho: str = "",
+               motivo_seguimiento: str = "") -> dict:
         # La baja va PRIMERO, antes de los topes y de exigir la API key: dar de baja cuesta
         # 0 USD y 0 correos, y a nadie se le puede negar por un tope diario. No se crea el
         # lead si no existe: solo se cierra el que ya está en la BD.
@@ -797,7 +804,12 @@ class AgenteVentas:
             return {"ok": False, "motivo": cerrado, "acciones": self.acciones,
                     "costo_usd": 0.0, "turnos": 0}
 
+        # `es_frio` = no escribió nada, así que el código le pone la línea de baja igual.
+        # Un seguimiento programado también es "frío" para la línea de baja, pero NO es
+        # un primer contacto: el modelo tiene que saber que ya le escribimos antes.
         es_frio = not mensaje_lead.strip()
+        motivo_seguimiento = (motivo_seguimiento or "").strip()
+        es_seguimiento = es_frio and bool(motivo_seguimiento)
         system_prompt = construir_system_prompt()
         contexto_lead = (
             f"Lead: {self.lead.get('email')}\n"
@@ -806,7 +818,14 @@ class AgenteVentas:
             f"Etapa actual: {self.lead.get('stage')}\n"
             f"Notas previas: {(self.lead.get('notes') or '(ninguna)')[:600]}\n\n"
         )
-        if es_frio:
+        if es_seguimiento:
+            contexto_lead += (
+                "Esto NO es un primer contacto en frío: es un SEGUIMIENTO programado de un correo "
+                "que ya le escribiste y que todavía no te ha contestado.\n"
+                f"Motivo del seguimiento: {motivo_seguimiento[:300]}\n"
+                "Escríbele un correo corto que retome lo anterior sin repetirlo y sin reclamarle "
+                "el silencio. No te presentes otra vez como si fuera la primera.")
+        elif es_frio:
             contexto_lead += ("No ha escrito nada: es primer contacto en frío. Escríbele un correo corto "
                               "con un ángulo concreto para su negocio y programa el seguimiento.")
         else:
@@ -819,8 +838,11 @@ class AgenteVentas:
                 f"[dry-run] identidad + alcance cargados ({len(system_prompt)} caracteres)")
             self.acciones.append(
                 f"[dry-run] lead validado: {self.lead.get('email')} (etapa {self.lead.get('stage')})")
-            self.acciones.append(
-                f"[dry-run] modo: {'correo en frío' if es_frio else 'respuesta a un mensaje'}")
+            if es_seguimiento:
+                modo = f"seguimiento programado ({motivo_seguimiento[:60]})"
+            else:
+                modo = "correo en frío" if es_frio else "respuesta a un mensaje"
+            self.acciones.append(f"[dry-run] modo: {modo}")
             self.acciones.append(
                 "[dry-run] herramientas listas: " + ", ".join(h["name"] for h in HERRAMIENTAS))
             self.acciones.append(

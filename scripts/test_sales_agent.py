@@ -18,6 +18,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -30,7 +31,17 @@ import database  # noqa: E402
 import sales_agent  # noqa: E402
 
 DB_REAL = PROJECT_ROOT / "data" / "el_socio.db"
+RESULTADOS_REAL = PROJECT_ROOT / "contexto" / "RESULTADOS_MERCADO.md"
 TABLAS_VIGILADAS = ("leads", "outbox", "agent_log", "agent_followups")
+
+# Cabecera mínima del archivo temporal de resultados: la misma forma que el real.
+CABECERA_RESULTADOS = (
+    "# Resultados de mercado\n\n## Registro\n"
+    "<!-- filas al FINAL. Nada debajo de la tabla. -->\n"
+    "| Fecha | Nicho | Ángulo usado | Canal | Cantidad | Resultado | Nota |\n"
+    "|---|---|---|---|---|---|---|\n"
+    "| 2026-01-01 | fila-que-ya-estaba | no se toca | correo | 3 | silencio | Intocable. |\n"
+)
 
 CFG_FALSA = {
     "ANTHROPIC_API_KEY": "clave-de-prueba-no-sirve",
@@ -85,6 +96,15 @@ class BaseConBDTemporal(unittest.TestCase):
                                             "create_calendar_event", return_value=True)
         self.parche_notif.start()
         self.parche_cal.start()
+        # RESULTADOS_MERCADO.md temporal: ninguna prueba escribe en el archivo real.
+        self.resultados = Path(self.tmp.name) / "RESULTADOS_MERCADO.md"
+        self.resultados.write_text(CABECERA_RESULTADOS, encoding="utf-8")
+        self.parche_resultados = mock.patch.object(autopilot_dispatcher, "RESULTADOS_FILE",
+                                                   self.resultados)
+        self.parche_resultados.start()
+        # Red de seguridad: si una prueba se salta el parche, falla aquí y no en silencio.
+        self.addCleanup(self._verificar_resultados_reales_intactos, huella(RESULTADOS_REAL))
+        self.addCleanup(self.parche_resultados.stop)
         self.addCleanup(self.tmp.cleanup)
         self.addCleanup(self.parche_cal.stop)
         self.addCleanup(self.parche_notif.stop)
@@ -102,6 +122,14 @@ class BaseConBDTemporal(unittest.TestCase):
         with sqlite3.connect(self.db) as con:
             return [r[0] for r in con.execute(
                 "SELECT status FROM outbox WHERE recipient=?", (email.lower(),)).fetchall()]
+
+    def _verificar_resultados_reales_intactos(self, antes: str) -> None:
+        self.assertEqual(huella(RESULTADOS_REAL), antes,
+                         "una prueba escribió en contexto/RESULTADOS_MERCADO.md")
+
+    def filas_resultados(self) -> list[str]:
+        return [l for l in self.resultados.read_text(encoding="utf-8").splitlines()
+                if l.startswith("| 20")]
 
     def estados_followups(self, lead_id: int) -> list[str]:
         with sqlite3.connect(self.db) as con:
@@ -691,8 +719,8 @@ class BaseDispatcherEnSeco(BaseConBDTemporal):
                                               return_value=True)
         self.parche_env.start()
         self.smtp = self.parche_smtp.start()
-        self.parche_notif_d.start()
-        self.parche_cal_d.start()
+        self.notif = self.parche_notif_d.start()
+        self.cal = self.parche_cal_d.start()
         for parche in (self.parche_cal_d, self.parche_notif_d, self.parche_smtp, self.parche_env):
             self.addCleanup(parche.stop)
 
@@ -931,6 +959,493 @@ class TestCicloDelAgenteNoTocaLaBDReal(unittest.TestCase):
         self.assertEqual(DB_REAL.exists(), existia, "el dry-run creó data/el_socio.db")
         self.assertEqual(huella(DB_REAL), antes_huella, "el dry-run modificó data/el_socio.db")
         self.assertEqual(contar_filas(DB_REAL), antes_filas, "el dry-run creó filas")
+
+
+# ------------------------------------------- 11. el contacto en frío no se repite nunca
+
+class TestContactoEnFrioNoSeRepite(BaseConBDTemporal):
+    """Hallazgo del Paso 5: el filtro mirava solo 'hoy', así que un lead contactado ayer
+    volvía a salir en frío cada mañana = spam diario a la misma dirección.
+    """
+
+    def _enviado_el(self, email: str, cuando: str) -> None:
+        database.enqueue_email(recipient=email, subject="Hola", body="Te escribo.")
+        with sqlite3.connect(self.db) as con:
+            con.execute("UPDATE outbox SET status='sent', created_at=?, scheduled_for=? "
+                        "WHERE recipient=?", (cuando, cuando, email))
+
+    def test_un_lead_contactado_ayer_no_vuelve_a_salir_en_frio(self) -> None:
+        self.crear_lead(email="ayer@ejemplo.com")
+        ayer = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        self._enviado_el("ayer@ejemplo.com", ayer)
+        correos = [l["email"] for l in database.list_cold_leads_for_agent(limit=20)]
+        self.assertNotIn("ayer@ejemplo.com", correos)
+
+    def test_tampoco_vuelve_a_salir_el_contactado_hace_meses(self) -> None:
+        self.crear_lead(email="viejo@ejemplo.com")
+        hace_meses = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d %H:%M:%S")
+        self._enviado_el("viejo@ejemplo.com", hace_meses)
+        self.assertEqual(database.list_cold_leads_for_agent(limit=20), [])
+
+    def test_el_que_nunca_recibio_nada_si_sale(self) -> None:
+        self.crear_lead(email="virgen@ejemplo.com")
+        correos = [l["email"] for l in database.list_cold_leads_for_agent(limit=20)]
+        self.assertEqual(correos, ["virgen@ejemplo.com"])
+
+    def test_el_filtro_no_se_confunde_con_mayusculas_ni_espacios(self) -> None:
+        self.crear_lead(email="mix@ejemplo.com")
+        with sqlite3.connect(self.db) as con:
+            con.execute("INSERT INTO outbox (recipient, status, created_at) "
+                        "VALUES (' MIX@Ejemplo.com ', 'sent', '2020-01-01 10:00:00')")
+        self.assertEqual(database.list_cold_leads_for_agent(limit=20), [])
+
+    def test_un_correo_cancelado_no_bloquea_el_contacto_en_frio(self) -> None:
+        self.crear_lead(email="cancel@ejemplo.com")
+        database.enqueue_email(recipient="cancel@ejemplo.com", subject="x", body="y")
+        database.cancel_pending_outbox_for_recipient("cancel@ejemplo.com")
+        correos = [l["email"] for l in database.list_cold_leads_for_agent(limit=20)]
+        self.assertEqual(correos, ["cancel@ejemplo.com"])
+
+
+class TestEtapaAutomaticaAlContactar(BaseConBDTemporal):
+    def test_el_correo_en_frio_mueve_el_lead_a_contactado(self) -> None:
+        lead = self.crear_lead(email="frio@ejemplo.com")
+        agente = self.agente()
+        agente.lead = dict(lead)
+        ok, _ = agente._tool_enviar_correo(
+            {"asunto": "Una idea para tu local", "cuerpo": "Hola, te escribo por tus renders."},
+            es_frio=True)
+        self.assertTrue(ok)
+        self.assertEqual(database.get_lead_by_email("frio@ejemplo.com")["stage"], "contactado")
+        self.assertEqual(agente.lead["stage"], "contactado")
+        # Y por lo tanto ya no vuelve a aparecer como lead en frío.
+        self.assertEqual(database.list_cold_leads_for_agent(limit=20), [])
+
+    def test_una_respuesta_no_cambia_la_etapa_sola(self) -> None:
+        lead = self.crear_lead(email="resp@ejemplo.com", stage="conversando")
+        agente = self.agente()
+        agente.lead = dict(lead)
+        ok, _ = agente._tool_enviar_correo(
+            {"asunto": "Te respondo", "cuerpo": "Claro que sí, lo vemos."}, es_frio=False)
+        self.assertTrue(ok)
+        self.assertEqual(database.get_lead_by_email("resp@ejemplo.com")["stage"], "conversando")
+
+    def test_en_dry_run_la_etapa_no_se_mueve(self) -> None:
+        lead = self.crear_lead(email="seco@ejemplo.com")
+        agente = self.agente(dry_run=True)
+        agente.lead = dict(lead)
+        ok, _ = agente._tool_enviar_correo(
+            {"asunto": "Idea", "cuerpo": "Hola, te escribo."}, es_frio=True)
+        self.assertTrue(ok)
+        self.assertEqual(database.get_lead_by_email("seco@ejemplo.com")["stage"], "nuevo_lead")
+
+
+# ------------------------------------------------- 12. --dry-run del motor completo
+
+class TestDryRunDelMotor(BaseDispatcherEnSeco):
+    """`autopilot_dispatcher.py --dry-run` sin `--run-agent` solo puede mirar."""
+
+    def _correr_main(self, *flags: str) -> dict:
+        with mock.patch.object(sys, "argv", ["autopilot_dispatcher.py", *flags]), \
+             mock.patch.object(autopilot_dispatcher, "ensure_daily_pipeline",
+                               return_value={}) as llenar, \
+             mock.patch.object(autopilot_dispatcher, "dispatch_due_jobs",
+                               return_value={}) as despachar, \
+             mock.patch.object(autopilot_dispatcher, "sync_landing_messages",
+                               return_value={}) as landing, \
+             mock.patch("builtins.print") as imprimir:
+            autopilot_dispatcher.main()
+        return {"llenar": llenar, "despachar": despachar, "landing": landing,
+                "salida": json.loads(imprimir.call_args[0][0])}
+
+    def test_dry_run_no_llena_la_cola_ni_despacha_ni_toca_la_landing(self) -> None:
+        res = self._correr_main("--dry-run")
+        self.assertEqual(res["llenar"].call_count, 0, "--dry-run llamó a ensure_daily_pipeline")
+        self.assertEqual(res["despachar"].call_count, 0, "--dry-run llamó a dispatch_due_jobs")
+        self.assertEqual(res["landing"].call_count, 0, "--dry-run llamó a sync_landing_messages")
+        self.assertEqual(self.smtp.call_count, 0, "--dry-run abrió SMTP")
+        self.assertTrue(res["salida"]["dry_run"])
+
+    def test_el_resumen_en_seco_cuenta_lo_que_hay_sin_escribir(self) -> None:
+        self.crear_lead(email="frio1@ejemplo.com")
+        antes = contar_filas(self.db)
+        res = self._correr_main("--dry-run")
+        self.assertEqual(res["salida"]["leads_en_frio_disponibles"], 1, res["salida"])
+        self.assertEqual(contar_filas(self.db), antes, "el resumen en seco escribió en la BD")
+        self.assertEqual(self.filas_resultados(), [l for l in CABECERA_RESULTADOS.splitlines()
+                                                   if l.startswith("| 20")])
+
+    def test_sin_dry_run_si_corre_el_motor_de_verdad(self) -> None:
+        res = self._correr_main()
+        self.assertEqual(res["llenar"].call_count, 1)
+        self.assertEqual(res["despachar"].call_count, 1)
+
+    def test_el_ciclo_del_agente_en_seco_no_crea_la_bd(self) -> None:
+        with mock.patch.object(database, "DB_PATH", Path(self.tmp.name) / "no-existe.db"):
+            res = autopilot_dispatcher.run_sales_agent_cycle(dry_run=True)
+            self.assertFalse(res["ran"])
+            self.assertEqual(res["reason"], "dry_run_sin_bd")
+            self.assertFalse((Path(self.tmp.name) / "no-existe.db").exists())
+
+
+class TestDryRunDelMotorNoTocaNadaReal(unittest.TestCase):
+    """`autopilot_dispatcher.py --dry-run` corrido como lo correría Raymond."""
+
+    def test_cli_dry_run_no_modifica_la_bd_ni_los_resultados(self) -> None:
+        antes_db, antes_filas = huella(DB_REAL), contar_filas(DB_REAL)
+        antes_md = huella(RESULTADOS_REAL)
+        existia = DB_REAL.exists()
+        proc = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / "scripts" / "autopilot_dispatcher.py"), "--dry-run"],
+            capture_output=True, text=True, cwd=str(PROJECT_ROOT), timeout=120,
+            env=dict(os.environ, ELSOCIO_QUIET="1"),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(json.loads(proc.stdout)["dry_run"])
+        self.assertEqual(DB_REAL.exists(), existia, "el dry-run creó data/el_socio.db")
+        self.assertEqual(huella(DB_REAL), antes_db, "el dry-run modificó data/el_socio.db")
+        self.assertEqual(contar_filas(DB_REAL), antes_filas, "el dry-run creó filas")
+        self.assertEqual(huella(RESULTADOS_REAL), antes_md,
+                         "el dry-run escribió en RESULTADOS_MERCADO.md")
+
+
+# ------------------------------------------------- 13. seguimientos y motivo
+
+class TestSeguimientosBienManejados(TestCicloDelAgente):
+    def test_si_el_agente_falla_el_seguimiento_queda_pendiente(self) -> None:
+        lead = self.crear_lead(stage="contactado")
+        fid = self._vencer_seguimiento(lead["id"])
+        with mock.patch.object(sales_agent.AgenteVentas, "correr",
+                               return_value={"ok": False, "motivo": "API: HTTP 529"}):
+            res = autopilot_dispatcher.run_sales_agent_cycle()
+        self.assertEqual(res["followups_corridos"], 0, res)
+        self.assertEqual(res["followups_fallidos"], 1, res)
+        with sqlite3.connect(self.db) as con:
+            estado = con.execute("SELECT estado FROM agent_followups WHERE id=?", (fid,)).fetchone()[0]
+        self.assertEqual(estado, "pendiente", "se marcó 'hecho' un seguimiento que no salió")
+
+    def test_si_el_agente_revienta_el_seguimiento_queda_pendiente(self) -> None:
+        lead = self.crear_lead(stage="contactado")
+        fid = self._vencer_seguimiento(lead["id"])
+        with mock.patch.object(sales_agent.AgenteVentas, "correr",
+                               side_effect=RuntimeError("se cayó la red")):
+            res = autopilot_dispatcher.run_sales_agent_cycle()
+        self.assertEqual(res["followups_corridos"], 0, res)
+        with sqlite3.connect(self.db) as con:
+            estado = con.execute("SELECT estado FROM agent_followups WHERE id=?", (fid,)).fetchone()[0]
+        self.assertEqual(estado, "pendiente")
+
+    def test_el_seguimiento_llega_con_su_motivo(self) -> None:
+        lead = self.crear_lead(stage="contactado")
+        database.schedule_followup(lead["id"], 1, "le mandé el ejemplo de render")
+        with sqlite3.connect(self.db) as con:
+            con.execute("UPDATE agent_followups SET programado_para='2000-01-01 00:00:00'")
+        with mock.patch.object(sales_agent.AgenteVentas, "correr",
+                               return_value={"ok": True}) as correr:
+            autopilot_dispatcher.run_sales_agent_cycle()
+        self.assertEqual(correr.call_args.kwargs["motivo_seguimiento"],
+                         "le mandé el ejemplo de render")
+
+    def test_un_lead_en_frio_no_lleva_motivo_de_seguimiento(self) -> None:
+        self.crear_lead(email="frio@ejemplo.com")
+        with mock.patch.object(sales_agent.AgenteVentas, "correr",
+                               return_value={"ok": True}) as correr:
+            autopilot_dispatcher.run_sales_agent_cycle()
+        self.assertEqual(correr.call_args.kwargs["motivo_seguimiento"], "")
+
+
+class TestContextoDelSeguimiento(BaseConBDTemporal):
+    """El modelo tiene que saber que un seguimiento NO es un primer contacto."""
+
+    def _contexto(self, **kwargs) -> str:
+        self.crear_lead(email="seg@ejemplo.com", stage="contactado")
+        agente = self.agente()
+        capturado = {}
+
+        def espia(api_key, cuerpo):
+            capturado["texto"] = cuerpo["messages"][0]["content"]
+            return respuesta_falsa(stop="end_turn")
+
+        with mock.patch.object(sales_agent, "llamar_api", side_effect=espia):
+            agente.correr(lead_email="seg@ejemplo.com", **kwargs)
+        return capturado.get("texto", "")
+
+    def test_con_motivo_el_contexto_dice_que_es_un_seguimiento(self) -> None:
+        texto = self._contexto(motivo_seguimiento="le mandé el ejemplo de render")
+        self.assertIn("SEGUIMIENTO programado", texto)
+        self.assertIn("le mandé el ejemplo de render", texto)
+        self.assertNotIn("primer contacto en frío. Escríbele", texto)
+
+    def test_sin_motivo_sigue_siendo_primer_contacto_en_frio(self) -> None:
+        texto = self._contexto()
+        self.assertIn("primer contacto en frío", texto)
+        self.assertNotIn("SEGUIMIENTO programado", texto)
+
+    def test_el_seguimiento_tambien_lleva_linea_de_baja(self) -> None:
+        self.crear_lead(email="seg2@ejemplo.com", stage="contactado")
+        agente = self.agente()
+        respuestas = [
+            respuesta_falsa(bloque_tool("enviar_correo",
+                                        {"asunto": "Retomo lo del render",
+                                         "cuerpo": "Te escribí la semana pasada, sigo disponible."})),
+            respuesta_falsa(stop="end_turn"),
+        ]
+        with mock.patch.object(sales_agent, "llamar_api", side_effect=respuestas):
+            agente.correr(lead_email="seg2@ejemplo.com", motivo_seguimiento="insistir una vez")
+        with sqlite3.connect(self.db) as con:
+            cuerpo = con.execute("SELECT body FROM outbox WHERE recipient='seg2@ejemplo.com'").fetchone()[0]
+        self.assertIn("BAJA", cuerpo)
+
+
+# ------------------------------------------------- 14. clasificación que cuida el saldo
+
+class TestClasificacionQueCuidaElSaldo(unittest.TestCase):
+    def test_una_pregunta_de_precio_es_un_interesado(self) -> None:
+        for cuerpo in ("¿Cuánto cuesta un render?", "cuanto cuesta eso?", "Mándame precios",
+                       "¿cuál es el precio?", "Cuéntame más", "necesito fichas técnicas",
+                       "¿me puedes ayudar con unas fotos?", "¿tienen ejemplos?",
+                       "quiero más información", "¿pueden hacer un render de mi local?"):
+            with self.subTest(cuerpo=cuerpo):
+                self.assertEqual(
+                    autopilot_dispatcher.classify_reply_intent("Re: propuesta", cuerpo),
+                    "interesado_cita")
+
+    def test_el_ruido_de_bandeja_sigue_siendo_ruido(self) -> None:
+        for cuerpo in ("ok recibido", "Listo, gracias.", "Adjunto la factura del mes.",
+                       "Reenvío este correo."):
+            with self.subTest(cuerpo=cuerpo):
+                self.assertEqual(
+                    autopilot_dispatcher.classify_reply_intent("Re: propuesta", cuerpo),
+                    "respuesta_recibida")
+
+    def test_el_ruido_no_esta_en_la_lista_que_gasta_saldo(self) -> None:
+        self.assertEqual(autopilot_dispatcher.INTENTS_PARA_EL_AGENTE, ("interesado_cita",))
+        self.assertNotIn("respuesta_recibida", autopilot_dispatcher.INTENTS_PARA_EL_AGENTE)
+
+
+class TestElRuidoNoGastaSaldo(TestCancelacionDeSeguimientosAlResponder):
+    def test_un_ok_recibido_no_dispara_la_api(self) -> None:
+        self.crear_lead()
+        with mock.patch.object(sales_agent.AgenteVentas, "correr") as correr:
+            res = self._sincronizar("ok recibido", con_api_key=True)
+        self.assertEqual(res["matched"], 1, res)
+        self.assertEqual(res["agent_runs"], 0, "el ruido de bandeja quemó saldo")
+        self.assertEqual(correr.call_count, 0)
+        self.assertEqual(database.get_lead_by_email("lead@ejemplo.com")["stage"],
+                         "respuesta_recibida")
+
+    def test_una_pregunta_de_precio_si_dispara_la_api(self) -> None:
+        self.crear_lead()
+        with mock.patch.object(sales_agent.AgenteVentas, "correr",
+                               return_value={"ok": True}) as correr:
+            res = self._sincronizar("¿Cuánto cuesta un render?", con_api_key=True)
+        self.assertEqual(res["agent_runs"], 1, res)
+        self.assertEqual(correr.call_count, 1)
+
+    def test_el_sync_en_seco_no_escribe_ni_avisa(self) -> None:
+        lead = self.crear_lead()
+        database.enqueue_email(recipient=lead["email"], subject="x", body="y")
+        database.schedule_followup(lead["id"], 3, "insistir")
+        antes = contar_filas(self.db)
+        self.cfg.update({"IMAP_HOST": "imap.ejemplo.com"})
+        crudo = self._correo_falso("lead@ejemplo.com", "Re: propuesta", "Me interesa, agendemos.")
+        with mock.patch.object(autopilot_dispatcher.imaplib, "IMAP4_SSL",
+                               return_value=self._imap_falso(crudo)):
+            res = autopilot_dispatcher.sync_imap_replies(dry_run=True)
+        self.assertEqual(res["matched"], 1, res)
+        self.assertEqual(contar_filas(self.db), antes, "el sync en seco escribió en la BD")
+        self.assertEqual(database.get_lead_by_email(lead["email"])["stage"], "nuevo_lead")
+        self.assertEqual(self.estados_outbox(lead["email"]), ["pending"])
+        self.assertEqual(self.estados_followups(lead["id"]), ["pendiente"])
+        self.assertEqual(self.notif.call_count, 0, "el sync en seco notificó en el Mac")
+        self.assertEqual(self.cal.call_count, 0, "el sync en seco creó un evento en Calendar")
+        self.assertEqual(len(self.filas_resultados()), 1, "el sync en seco registró una fila")
+
+
+# ------------------------------------------------- 15. Paso 6: RESULTADOS_MERCADO.md
+
+class TestRegistroDeResultados(BaseConBDTemporal):
+    """Todo contra el archivo TEMPORAL. El real no se toca ni una vez (lo vigila la base)."""
+
+    def registrar(self, *args, **kwargs) -> dict:
+        kwargs.setdefault("ruta", self.resultados)
+        return autopilot_dispatcher.registrar_resultado_mercado(*args, **kwargs)
+
+    def test_agrega_la_fila_valida_al_final(self) -> None:
+        res = self.registrar("modelado-3d-espacios", "render del local", "correo", 4,
+                             "respondió", "Una respuesta real.")
+        self.assertTrue(res["escrito"], res)
+        lineas = self.resultados.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lineas[-1], res["fila"])
+        self.assertIn("| modelado-3d-espacios | render del local | correo | 4 | respondió |",
+                      lineas[-1])
+
+    def test_no_toca_ni_borra_las_filas_que_ya_estaban(self) -> None:
+        antes = self.resultados.read_text(encoding="utf-8")
+        self.registrar("nicho", "angulo", "correo", 1, "rebote", "x")
+        despues = self.resultados.read_text(encoding="utf-8")
+        self.assertTrue(despues.startswith(antes), "reescribió o reordenó el archivo")
+        self.assertIn("fila-que-ya-estaba", despues)
+
+    def test_sanitiza_pipes_y_saltos_de_linea(self) -> None:
+        res = self.registrar("ni|cho", "angulo\ncon\nsaltos", "correo", 1, "respondió",
+                             "nota | con pipe\ny salto\ttab")
+        self.assertTrue(res["escrito"], res)
+        fila = self.resultados.read_text(encoding="utf-8").splitlines()[-1]
+        self.assertEqual(fila.count("|"), 8, f"la tabla se rompió: {fila}")
+        self.assertNotIn("\n", fila)
+        self.assertIn("ni/cho", fila)
+        self.assertIn("nota / con pipe y salto tab", fila)
+
+    def test_la_tabla_sigue_teniendo_7_columnas_en_toda_fila(self) -> None:
+        self.registrar("n", "a", "landing", 2, "agendó", "ok")
+        for fila in self.filas_resultados():
+            self.assertEqual(len(fila.strip("|").split("|")), 7, fila)
+
+    def test_rechaza_un_canal_que_no_existe(self) -> None:
+        for canal in ("telegram", "", "tiktok", "correo electronico"):
+            with self.subTest(canal=canal):
+                res = self.registrar("n", "a", canal, 1, "respondió", "x")
+                self.assertFalse(res["escrito"], res)
+                self.assertIn("canal inválido", res["error"])
+        self.assertEqual(len(self.filas_resultados()), 1)
+
+    def test_rechaza_un_resultado_que_no_existe(self) -> None:
+        for resultado in ("vendido", "", "quizás", "cerrado"):
+            with self.subTest(resultado=resultado):
+                res = self.registrar("n", "a", "correo", 1, resultado, "x")
+                self.assertFalse(res["escrito"], res)
+                self.assertIn("resultado inválido", res["error"])
+        self.assertEqual(len(self.filas_resultados()), 1)
+
+    def test_acepta_los_cinco_canales_y_los_cinco_resultados(self) -> None:
+        for canal in autopilot_dispatcher.CANALES_VALIDOS:
+            for resultado in autopilot_dispatcher.RESULTADOS_VALIDOS:
+                with self.subTest(canal=canal, resultado=resultado):
+                    self.assertTrue(
+                        self.registrar("n", "a", canal, 1, resultado, "x", dry_run=True)["dry_run"])
+
+    def test_normaliza_el_resultado_sin_acento(self) -> None:
+        res = self.registrar("n", "a", "correo", 1, "respondio", "x")
+        self.assertIn("| respondió |", res["fila"])
+
+    def test_rechaza_una_cantidad_que_no_es_un_conteo_real(self) -> None:
+        for cantidad in (0, -3, "muchos", None):
+            with self.subTest(cantidad=cantidad):
+                res = self.registrar("n", "a", "correo", cantidad, "respondió", "x")
+                self.assertFalse(res["escrito"], res)
+        self.assertEqual(len(self.filas_resultados()), 1)
+
+    def test_en_dry_run_no_escribe_en_disco(self) -> None:
+        antes = self.resultados.read_text(encoding="utf-8")
+        res = self.registrar("n", "a", "correo", 9, "agendó", "x", dry_run=True)
+        self.assertFalse(res["escrito"])
+        self.assertTrue(res["dry_run"])
+        self.assertIn("| 9 | agendó |", res["fila"])
+        self.assertEqual(self.resultados.read_text(encoding="utf-8"), antes)
+
+    def test_si_el_archivo_no_existe_no_lo_inventa(self) -> None:
+        inexistente = Path(self.tmp.name) / "no-esta.md"
+        res = autopilot_dispatcher.registrar_resultado_mercado(
+            "n", "a", "correo", 1, "respondió", "x", ruta=inexistente)
+        self.assertFalse(res["escrito"])
+        self.assertFalse(inexistente.exists())
+
+
+class TestSilenciosReales(BaseConBDTemporal):
+    """El silencio se registra con plazo cumplido y conteo real, nunca el día del envío."""
+
+    def _enviar(self, email: str, dias_atras: int, nicho: str = "modelado-3d-espacios") -> None:
+        cuando = (datetime.now() - timedelta(days=dias_atras)).strftime("%Y-%m-%d %H:%M:%S")
+        database.enqueue_email(recipient=email, subject="x", body="y", nicho=nicho)
+        with sqlite3.connect(self.db) as con:
+            con.execute("UPDATE outbox SET status='sent', created_at=? WHERE recipient=?",
+                        (cuando, email))
+
+    def registrar(self, **kwargs) -> dict:
+        kwargs.setdefault("ruta", self.resultados)
+        return autopilot_dispatcher.registrar_silencios_vencidos(**kwargs)
+
+    def test_una_tanda_de_hoy_no_se_registra_como_silencio(self) -> None:
+        self._enviar("hoy@ejemplo.com", 0)
+        self.assertEqual(self.registrar()["registradas"], 0)
+        self.assertEqual(len(self.filas_resultados()), 1)
+
+    def test_una_tanda_vencida_sin_respuesta_se_registra_con_el_conteo_real(self) -> None:
+        for i in range(3):
+            self._enviar(f"viejo{i}@ejemplo.com", 10)
+        res = self.registrar()
+        self.assertEqual(res["registradas"], 1, res)
+        fila = self.filas_resultados()[-1]
+        self.assertIn("| modelado-3d-espacios |", fila)
+        self.assertIn("| correo | 3 | silencio |", fila)
+
+    def test_no_cuenta_a_quien_si_respondio(self) -> None:
+        for i in range(3):
+            self._enviar(f"v{i}@ejemplo.com", 10)
+        database.record_processed_reply("<m1@x>", "v1@ejemplo.com", "interesado_cita", "me interesa")
+        self.registrar()
+        self.assertIn("| correo | 2 | silencio |", self.filas_resultados()[-1])
+
+    def test_el_mismo_evento_no_se_registra_dos_veces(self) -> None:
+        self._enviar("v@ejemplo.com", 10)
+        self.assertEqual(self.registrar()["registradas"], 1)
+        self.assertEqual(self.registrar()["registradas"], 0, "duplicó la tanda")
+        self.assertEqual(self.registrar()["registradas"], 0)
+        self.assertEqual(len(self.filas_resultados()), 2)
+
+    def test_en_dry_run_no_escribe_nada(self) -> None:
+        self._enviar("v@ejemplo.com", 10)
+        antes = self.resultados.read_text(encoding="utf-8")
+        res = self.registrar(dry_run=True)
+        self.assertEqual(res["registradas"], 1, res)
+        self.assertEqual(self.resultados.read_text(encoding="utf-8"), antes)
+
+    def test_sin_bd_no_inventa_nada(self) -> None:
+        with mock.patch.object(database, "DB_PATH", Path(self.tmp.name) / "no-hay.db"):
+            res = self.registrar()
+        self.assertEqual(res["registradas"], 0)
+        self.assertEqual(res["razon"], "sin_bd")
+
+
+class TestRegistroDeEventosRealesDelMotor(BaseDispatcherEnSeco):
+    def test_una_respuesta_interesada_queda_registrada(self) -> None:
+        self.crear_lead()
+        self.cfg.update({"IMAP_HOST": "imap.ejemplo.com"})
+        crudo = (b"From: lead@ejemplo.com\r\nSubject: Re: propuesta\r\n"
+                 b"Message-ID: <uno@ejemplo.com>\r\nContent-Type: text/plain\r\n\r\n"
+                 b"Me interesa, agendemos una llamada.\r\n")
+        imap = mock.MagicMock()
+        imap.__enter__.return_value = imap
+        imap.__exit__.return_value = False
+        imap.search.return_value = ("OK", [b"1"])
+        imap.fetch.return_value = ("OK", [(b"1 (RFC822 {0}", crudo)])
+        with mock.patch.object(autopilot_dispatcher.imaplib, "IMAP4_SSL", return_value=imap):
+            autopilot_dispatcher.sync_imap_replies()
+        fila = self.filas_resultados()[-1]
+        self.assertIn("| correo | 1 | respondió |", fila)
+        self.assertIn("lead@ejemplo.com", fila)
+
+    def test_un_rebote_permanente_marca_el_lead_y_queda_registrado(self) -> None:
+        self.crear_lead(email="mala@ejemplo.com")
+        database.enqueue_email(recipient="mala@ejemplo.com", subject="x", body="y",
+                               nicho="fichas-tecnicas-ropa")
+        self.smtp.side_effect = autopilot_dispatcher.smtplib.SMTPRecipientsRefused(
+            {"mala@ejemplo.com": (550, b"User unknown")})
+        res = autopilot_dispatcher.dispatch_due_jobs()
+        self.assertEqual(res["bounced"], 1, res)
+        self.assertEqual(int(database.get_lead_by_email("mala@ejemplo.com")["bounced"]), 1)
+        self.assertIn("| correo | 1 | rebote |", self.filas_resultados()[-1])
+
+    def test_un_fallo_temporal_no_es_un_rebote(self) -> None:
+        self.crear_lead(email="ok@ejemplo.com")
+        database.enqueue_email(recipient="ok@ejemplo.com", subject="x", body="y")
+        self.smtp.side_effect = TimeoutError("se cayó la red")
+        res = autopilot_dispatcher.dispatch_due_jobs()
+        self.assertEqual(res["failed"], 1, res)
+        self.assertEqual(res["bounced"], 0, "quemó un lead por un error temporal")
+        self.assertEqual(int(database.get_lead_by_email("ok@ejemplo.com")["bounced"]), 0)
+        self.assertEqual(len(self.filas_resultados()), 1)
 
 
 if __name__ == "__main__":

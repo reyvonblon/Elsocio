@@ -155,19 +155,23 @@ def get_lead_by_id(lead_id: int | None) -> dict | None:
 
 
 def list_cold_leads_for_agent(limit: int = 5) -> list[dict]:
-    """Leads que el agente puede contactar en frío: nuevos, sin rebote, sin correo pendiente
-    ni enviado hoy. Los más viejos primero, para no dejar a nadie en la cola para siempre.
+    """Leads que el agente puede contactar en frío: nuevos, sin rebote y a los que NUNCA
+    se les ha escrito.
+
+    El filtro NO se limita al día de hoy a propósito: una vez contactado en frío, un lead
+    no vuelve a salir por esta puerta nunca más (si no, cada día amanece con el mismo
+    correo en frío = spam). Los recontactos van solo por `agent_followups`.
+    Los más viejos primero, para no dejar a nadie en la cola para siempre.
     """
-    today = datetime.now().strftime("%Y-%m-%d")
     with _conn() as conn:
         rows = conn.execute(
             "SELECT * FROM leads WHERE stage='nuevo_lead' AND COALESCE(bounced, 0)=0 "
             "AND email IS NOT NULL AND TRIM(email)!='' "
-            "AND LOWER(TRIM(email)) NOT IN (SELECT recipient FROM outbox WHERE status='pending') "
-            "AND LOWER(TRIM(email)) NOT IN (SELECT recipient FROM outbox WHERE status='sent' "
-            "    AND created_at LIKE ?) "
+            "AND LOWER(TRIM(email)) NOT IN ("
+            "    SELECT LOWER(TRIM(recipient)) FROM outbox WHERE status IN ('pending', 'sent')"
+            ") "
             "ORDER BY COALESCE(updated_at, created_at) ASC LIMIT ?",
-            (f"{today}%", max(1, limit)),
+            (max(1, limit),),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -462,3 +466,30 @@ def cancel_followups_for_lead(lead_id: int) -> None:
             "UPDATE agent_followups SET estado='cancelado' WHERE lead_id=? AND estado='pendiente'",
             (lead_id,),
         )
+
+
+# ---------------------------------------------------- registro real de mercado
+
+def summarize_silent_sent_batches(*, dias: int = 7) -> list[dict]:
+    """Tandas REALMENTE enviadas hace `dias` o más en las que nadie respondió.
+
+    Es el único dato honesto de 'silencio': se cuenta cuando ya pasó el plazo, no el
+    día del envío (ese día todavía nadie tuvo tiempo de contestar). Agrupa por día de
+    envío y nicho, y devuelve el conteo real de correos de esa tanda.
+    """
+    corte = (datetime.now() - timedelta(days=max(1, dias))).strftime("%Y-%m-%d")
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT SUBSTR(created_at, 1, 10) AS dia, "
+            "       COALESCE(NULLIF(TRIM(nicho), ''), '(sin nicho)') AS nicho, "
+            "       COUNT(*) AS cantidad "
+            "FROM outbox WHERE status='sent' AND created_at IS NOT NULL "
+            "AND SUBSTR(created_at, 1, 10) <= ? "
+            "AND LOWER(TRIM(recipient)) NOT IN ("
+            "    SELECT LOWER(TRIM(sender_email)) FROM processed_replies "
+            "    WHERE sender_email IS NOT NULL"
+            ") "
+            "GROUP BY dia, nicho ORDER BY dia ASC",
+            (corte,),
+        ).fetchall()
+        return [dict(r) for r in rows]
