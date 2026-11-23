@@ -8,3 +8,11 @@ __pycache__/
 *.pyc
 redes/video-logo/node_modules/
 redes/video-logo/out/
+
+# Multimedia pesada: nunca entra a Git (solo vive local)
+contexto/referencias_video/*.mov
+contexto/referencias_video/*.mp4
+redes/posts/*.png
+redes/voz/*.aiff
+redes/voz/*.m4a
+redes/video-logo/out/

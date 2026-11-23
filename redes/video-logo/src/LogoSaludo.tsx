@@ -1,0 +1,207 @@
+import {
+  AbsoluteFill,
+  Easing,
+  interpolate,
+  useCurrentFrame,
+  useVideoConfig,
+} from "remotion";
+
+export const LogoSaludo: React.FC = () => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+
+  const entryScale = interpolate(frame, [0, 0.5 * fps], [0.8, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.spring({ damping: 200 }),
+    output: "perceptual-scale",
+  });
+  const entryOpacity = interpolate(frame, [0, 0.35 * fps], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  const mustacheDraw = interpolate(frame, [0.2 * fps, 1 * fps], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.cubic),
+  });
+
+  // Saludo: el sombrero se levanta y vuelve a su sitio, como "quitándose el sombrero".
+  const hatLift = interpolate(
+    frame,
+    [1.1 * fps, 1.5 * fps, 1.9 * fps, 2.3 * fps],
+    [0, -18, -18, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.inOut(Easing.cubic),
+    },
+  );
+  const hatTilt = interpolate(
+    frame,
+    [1.1 * fps, 1.5 * fps, 1.9 * fps, 2.3 * fps],
+    [0, -14, -14, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.inOut(Easing.cubic),
+    },
+  );
+
+  // Guiño: un parpadeo rápido del lente izquierdo cerca del final.
+  const wink = interpolate(
+    frame,
+    [2.4 * fps, 2.5 * fps, 2.6 * fps, 2.7 * fps],
+    [1, 0.08, 0.08, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    },
+  );
+
+  return (
+    <AbsoluteFill
+      style={{
+        backgroundColor: "#0a0a0a",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <svg
+        viewBox="0 0 680 344"
+        width={480}
+        height={243}
+        style={{ scale: entryScale, opacity: entryOpacity }}
+      >
+        <defs>
+          <linearGradient id="mustacheLine" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#a8a8ae" />
+            <stop offset="16%" stopColor="#e8e8ed" />
+            <stop offset="38%" stopColor="#ffffff" />
+            <stop offset="50%" stopColor="#d8d8de" />
+            <stop offset="62%" stopColor="#ffffff" />
+            <stop offset="84%" stopColor="#e8e8ed" />
+            <stop offset="100%" stopColor="#a8a8ae" />
+          </linearGradient>
+          <linearGradient id="hatSilk" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#19191b" />
+            <stop offset="28%" stopColor="#2a2a2d" />
+            <stop offset="60%" stopColor="#0d0d0e" />
+            <stop offset="100%" stopColor="#151517" />
+          </linearGradient>
+          <linearGradient id="hatRim" x1="0" y1="0" x2="1" y2="0.4">
+            <stop offset="0%" stopColor="#ffffff" stopOpacity={0.88} />
+            <stop offset="55%" stopColor="#d2d2d7" stopOpacity={0.62} />
+            <stop offset="100%" stopColor="#ffffff" stopOpacity={0.72} />
+          </linearGradient>
+          <linearGradient id="tieRed" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#b22337" />
+            <stop offset="50%" stopColor="#9c1c2e" />
+            <stop offset="100%" stopColor="#721220" />
+          </linearGradient>
+        </defs>
+
+        <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+          <g
+            stroke="url(#mustacheLine)"
+            strokeWidth={8}
+            fill="none"
+            strokeDasharray={1}
+            pathLength={1}
+            style={{
+              strokeDashoffset: interpolate(mustacheDraw, [0, 1], [1, 0]),
+            }}
+          >
+            <path d="M 340 224 C 375 234, 430 240, 470 232 C 495 227, 512 218, 522 206" />
+            <path d="M 340 224 C 305 234, 250 240, 210 232 C 185 227, 168 218, 158 206" />
+          </g>
+        </g>
+
+        <g>
+          <path
+            d="M 220.8 205 L 236.2 205 L 232.8 219.5 L 238.5 284 L 228.5 302 L 218.5 284 L 224.2 219.5 Z"
+            fill="#0a0a0a"
+            stroke="#0a0a0a"
+            strokeWidth={5.5}
+            strokeLinejoin="round"
+          />
+          <path
+            d="M 224.3 219.5 L 232.7 219.5 L 238 283.5 L 228.5 301.5 L 219 283.5 Z"
+            fill="url(#tieRed)"
+          />
+        </g>
+
+        <text
+          y={198}
+          fontFamily="'Playfair Display', Georgia, serif"
+          fontWeight={800}
+          fontSize={140}
+          fill="#ffffff"
+        >
+          <tspan x={73}>El</tspan>
+          <tspan x={249}>Socio</tspan>
+        </text>
+
+        <g>
+          <g stroke="#0a0a0a" strokeLinecap="round" fill="none">
+            <circle
+              cx={272}
+              cy={143}
+              r={14.8}
+              strokeWidth={4.4}
+              style={{ scale: wink, transformOrigin: "272px 143px" }}
+            />
+            <circle cx={311} cy={143} r={14.8} strokeWidth={4.4} />
+            <path d="M 286.6 142 Q 291.5 136.5, 296.4 142" strokeWidth={4} />
+            <line x1={257} y1={141.5} x2={252} y2={139} strokeWidth={4} />
+            <line x1={326} y1={141.5} x2={331} y2={139} strokeWidth={4} />
+          </g>
+          <g stroke="#ffffff" fill="none" strokeLinecap="round">
+            <circle
+              cx={272}
+              cy={143}
+              r={14.8}
+              strokeWidth={2.2}
+              style={{ scale: wink, transformOrigin: "272px 143px" }}
+            />
+            <circle cx={311} cy={143} r={14.8} strokeWidth={2.2} />
+            <path d="M 286.8 142 Q 291.5 136.8, 296.2 142" strokeWidth={1.9} />
+            <line x1={257.2} y1={141.5} x2={252.2} y2={139} strokeWidth={1.9} />
+            <line x1={325.8} y1={141.5} x2={330.8} y2={139} strokeWidth={1.9} />
+          </g>
+        </g>
+
+        <g
+          style={{
+            translate: `0px ${hatLift}px`,
+            rotate: `${hatTilt}deg`,
+            transformOrigin: "567px 104px",
+          }}
+        >
+          <path
+            d="M 522 104 C 522 99.5, 543 96.5, 567.5 96.5 C 592 96.5, 613 99.5, 613 104 C 613 108.5, 592 111.5, 567.5 111.5 C 543 111.5, 522 108.5, 522 104 Z"
+            fill="#ffffff"
+          />
+          <path
+            d="M 549 49 L 586 49 L 586 100 L 549 100 Z"
+            fill="url(#hatSilk)"
+            stroke="url(#hatRim)"
+            strokeWidth={2}
+            strokeLinejoin="round"
+          />
+          <rect x={549} y={88} width={37} height={8} fill="#ffffff" />
+          <rect
+            x={549}
+            y={88}
+            width={37}
+            height={8}
+            fill="none"
+            stroke="#0a0a0a"
+            strokeWidth={1.4}
+          />
+        </g>
+      </svg>
+    </AbsoluteFill>
+  );
+};

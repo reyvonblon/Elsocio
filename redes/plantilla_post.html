@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800&display=swap">
+<style>
+  html,body{ margin:0; padding:0; background:#0a0a0a; }
+  .post{
+    width:1080px; height:1350px;
+    background:#0a0a0a;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    box-sizing:border-box;
+    padding:120px 90px;
+  }
+  .frase{
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Helvetica,Arial,sans-serif;
+    font-weight:700;
+    font-size:64px;
+    line-height:1.25;
+    color:#ffffff;
+    text-align:center;
+    letter-spacing:-0.01em;
+  }
+  .mark{ width:340px; height:auto; margin-top:90px; }
+</style>
+</head>
+<body>
+  <div class="post">
+    <div class="frase" id="frase">TEXTO DE LA FRASE AQUÍ</div>
+
+    <svg class="mark" viewBox="0 0 680 344" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="El Socio">
+      <defs>
+        <linearGradient id="mustacheLine" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#a8a8ae"/>
+          <stop offset="16%" stop-color="#e8e8ed"/>
+          <stop offset="38%" stop-color="#ffffff"/>
+          <stop offset="50%" stop-color="#d8d8de"/>
+          <stop offset="62%" stop-color="#ffffff"/>
+          <stop offset="84%" stop-color="#e8e8ed"/>
+          <stop offset="100%" stop-color="#a8a8ae"/>
+        </linearGradient>
+        <linearGradient id="hatSilk" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#19191b"/>
+          <stop offset="28%" stop-color="#2a2a2d"/>
+          <stop offset="60%" stop-color="#0d0d0e"/>
+          <stop offset="100%" stop-color="#151517"/>
+        </linearGradient>
+        <linearGradient id="hatRim" x1="0" y1="0" x2="1" y2="0.4">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.88"/>
+          <stop offset="55%" stop-color="#d2d2d7" stop-opacity="0.62"/>
+          <stop offset="100%" stop-color="#ffffff" stop-opacity="0.72"/>
+        </linearGradient>
+        <linearGradient id="tieRed" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#b22337"/>
+          <stop offset="50%" stop-color="#9c1c2e"/>
+          <stop offset="100%" stop-color="#721220"/>
+        </linearGradient>
+      </defs>
+
+      <g id="mustache" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <g stroke="#0a0a0a" stroke-opacity="0.35" stroke-width="9" fill="none">
+          <path d="M 340 227 C 375 237, 430 243, 470 235 C 495 230, 512 221, 522 209"/>
+          <path d="M 340 227 C 305 237, 250 243, 210 235 C 185 230, 168 221, 158 209"/>
+        </g>
+        <g stroke="url(#mustacheLine)" stroke-width="8" fill="none">
+          <path d="M 340 224 C 375 234, 430 240, 470 232 C 495 227, 512 218, 522 206"/>
+          <path d="M 340 224 C 305 234, 250 240, 210 232 C 185 227, 168 218, 158 206"/>
+        </g>
+      </g>
+
+      <g id="tie">
+        <path d="M 220.8 205 L 236.2 205 L 232.8 219.5 L 238.5 284 L 228.5 302 L 218.5 284 L 224.2 219.5 Z"
+              fill="#0a0a0a" stroke="#0a0a0a" stroke-width="5.5" stroke-linejoin="round"/>
+        <path d="M 224.3 219.5 L 232.7 219.5 L 238 283.5 L 228.5 301.5 L 219 283.5 Z"
+              fill="url(#tieRed)"/>
+      </g>
+
+      <text y="198" font-family="'Playfair Display', Georgia, serif" font-weight="800" font-size="140" fill="#ffffff">
+        <tspan x="73">El</tspan><tspan x="249">Socio</tspan>
+      </text>
+
+      <g id="glasses">
+        <g stroke="#0a0a0a" stroke-linecap="round" fill="none">
+          <circle cx="272" cy="143" r="14.8" stroke-width="4.4"/>
+          <circle cx="311" cy="143" r="14.8" stroke-width="4.4"/>
+          <path d="M 286.6 142 Q 291.5 136.5, 296.4 142" stroke-width="4"/>
+          <line x1="257" y1="141.5" x2="252" y2="139" stroke-width="4"/>
+          <line x1="326" y1="141.5" x2="331" y2="139" stroke-width="4"/>
+        </g>
+        <g stroke="#ffffff" fill="none" stroke-linecap="round">
+          <circle cx="272" cy="143" r="14.8" stroke-width="2.2"/>
+          <circle cx="311" cy="143" r="14.8" stroke-width="2.2"/>
+          <path d="M 286.8 142 Q 291.5 136.8, 296.2 142" stroke-width="1.9"/>
+          <line x1="257.2" y1="141.5" x2="252.2" y2="139" stroke-width="1.9"/>
+          <line x1="325.8" y1="141.5" x2="330.8" y2="139" stroke-width="1.9"/>
+        </g>
+      </g>
+
+      <g id="top-hat">
+        <path d="M 522 104 C 522 99.5, 543 96.5, 567.5 96.5 C 592 96.5, 613 99.5, 613 104 C 613 108.5, 592 111.5, 567.5 111.5 C 543 111.5, 522 108.5, 522 104 Z" fill="#ffffff"/>
+        <path d="M 549 49 L 586 49 L 586 100 L 549 100 Z" fill="url(#hatSilk)" stroke="url(#hatRim)" stroke-width="2" stroke-linejoin="round"/>
+        <rect x="549" y="88" width="37" height="8" fill="#ffffff"/>
+        <rect x="549" y="88" width="37" height="8" fill="none" stroke="#0a0a0a" stroke-width="1.4"/>
+      </g>
+    </svg>
+  </div>
+
+<script>
+  // Lee la frase desde el parámetro ?frase=... de la URL (URL-encoded) para generar
+  // cada post sin tocar este archivo.
+  const params = new URLSearchParams(window.location.search);
+  const frase = params.get("frase");
+  if (frase) document.getElementById("frase").textContent = frase;
+</script>
+</body>
+</html>

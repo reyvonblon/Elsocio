@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html,body{ margin:0; padding:0; background:#0a0a0a; }
+  .canvas{
+    width:1024px; height:1024px;
+    background:#0a0a0a;
+    display:flex; align-items:center; justify-content:center;
+  }
+  svg{ width:800px; height:800px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="mustacheLine" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stop-color="#a8a8ae"/>
+        <stop offset="16%" stop-color="#e8e8ed"/>
+        <stop offset="38%" stop-color="#ffffff"/>
+        <stop offset="50%" stop-color="#d8d8de"/>
+        <stop offset="62%" stop-color="#ffffff"/>
+        <stop offset="84%" stop-color="#e8e8ed"/>
+        <stop offset="100%" stop-color="#a8a8ae"/>
+      </linearGradient>
+      <linearGradient id="hatSilk" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stop-color="#19191b"/>
+        <stop offset="28%" stop-color="#2a2a2d"/>
+        <stop offset="60%" stop-color="#0d0d0e"/>
+        <stop offset="100%" stop-color="#151517"/>
+      </linearGradient>
+      <linearGradient id="hatRim" x1="0" y1="0" x2="1" y2="0.4">
+        <stop offset="0%" stop-color="#ffffff" stop-opacity="0.88"/>
+        <stop offset="55%" stop-color="#d2d2d7" stop-opacity="0.62"/>
+        <stop offset="100%" stop-color="#ffffff" stop-opacity="0.72"/>
+      </linearGradient>
+      <linearGradient id="tieRed" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stop-color="#b22337"/>
+        <stop offset="50%" stop-color="#9c1c2e"/>
+        <stop offset="100%" stop-color="#721220"/>
+      </linearGradient>
+      <radialGradient id="bgCircle" cx="50%" cy="42%" r="65%">
+        <stop offset="0%" stop-color="#241316"/>
+        <stop offset="100%" stop-color="#140a0b"/>
+      </radialGradient>
+    </defs>
+
+    <!-- Fondo circular -->
+    <circle cx="100" cy="100" r="98" fill="url(#bgCircle)"/>
+    <circle cx="100" cy="100" r="97" fill="none" stroke="#3a1a1f" stroke-width="1.2"/>
+
+    <!-- Sombrero de copa, arriba, con más volumen y brillo -->
+    <g>
+      <path d="M 74 55 C 74 52, 87 50, 100 50 C 113 50, 126 52, 126 55 C 126 58, 113 60, 100 60 C 87 60, 74 58, 74 55 Z" fill="#ffffff"/>
+      <path d="M 74 55 C 74 52, 87 50, 100 50 C 113 50, 126 52, 126 55 C 126 58, 113 60, 100 60 C 87 60, 74 58, 74 55 Z" fill="none" stroke="#0a0a0a" stroke-width="0.6" opacity="0.25"/>
+      <path d="M 84 20 L 116 20 L 116 51 L 84 51 Z" fill="url(#hatSilk)" stroke="url(#hatRim)" stroke-width="1.2" stroke-linejoin="round"/>
+      <rect x="84" y="20" width="32" height="2" fill="#ffffff" opacity="0.35"/>
+      <rect x="91" y="25" width="1.6" height="22" rx="0.8" fill="#ffffff" opacity="0.4"/>
+      <rect x="84" y="45" width="32" height="6" fill="#ffffff"/>
+      <rect x="84" y="45" width="32" height="6" fill="none" stroke="#0a0a0a" stroke-width="1"/>
+    </g>
+
+    <!-- Lentes = ojos -->
+    <g>
+      <g stroke="#0a0a0a" stroke-linecap="round" fill="none">
+        <circle cx="78" cy="90" r="16" stroke-width="4.8"/>
+        <circle cx="122" cy="90" r="16" stroke-width="4.8"/>
+        <path d="M 93.5 89, Q 100 82, 106.5 89" stroke-width="4.4"/>
+        <line x1="62" y1="87" x2="53" y2="83" stroke-width="4.4"/>
+        <line x1="138" y1="87" x2="147" y2="83" stroke-width="4.4"/>
+      </g>
+      <g stroke="#ffffff" fill="none" stroke-linecap="round">
+        <circle cx="78" cy="90" r="16" stroke-width="2.4"/>
+        <circle cx="122" cy="90" r="16" stroke-width="2.4"/>
+        <path d="M 93.7 89 Q 100 82.5, 106.3 89" stroke-width="2.1"/>
+        <line x1="62.2" y1="87" x2="53.2" y2="83" stroke-width="2.1"/>
+        <line x1="137.8" y1="87" x2="146.8" y2="83" stroke-width="2.1"/>
+      </g>
+    </g>
+
+    <!-- Bigote = boca, más voluminoso, con puntas enrolladas -->
+    <g fill="none" stroke-linecap="round">
+      <path d="M 100 121 C 92 127, 80 131, 69 128.5 C 60 126.4, 54 121.8, 51 116.5"
+            stroke="url(#mustacheLine)" stroke-width="8.5"/>
+      <path d="M 100 121 C 108 127, 120 131, 131 128.5 C 140 126.4, 146 121.8, 149 116.5"
+            stroke="url(#mustacheLine)" stroke-width="8.5"/>
+      <!-- puntas enrolladas -->
+      <path d="M 51 116.5 C 48 113.5, 48.5 108.5, 53 107 C 57.5 105.5, 61 109, 59 113.5"
+            stroke="url(#mustacheLine)" stroke-width="6.5"/>
+      <path d="M 149 116.5 C 152 113.5, 151.5 108.5, 147 107 C 142.5 105.5, 139 109, 141 113.5"
+            stroke="url(#mustacheLine)" stroke-width="6.5"/>
+    </g>
+
+    <!-- Moño/corbata, como mentón -->
+    <g>
+      <path d="M 94 135 L 106 135 L 103.5 146 L 107.5 166 L 100 177 L 92.5 166 L 96.5 146 Z"
+            fill="#0a0a0a" stroke="#0a0a0a" stroke-width="2.8" stroke-linejoin="round"/>
+      <path d="M 96.6 146 L 103.4 146 L 107.1 165.6 L 100 176.2 L 92.9 165.6 Z" fill="url(#tieRed)"/>
+    </g>
+  </svg>
+</div>
+</body>
+</html>
