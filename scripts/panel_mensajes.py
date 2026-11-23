@@ -81,13 +81,19 @@ def render(messages: list[dict]) -> str:
 </html>"""
 
 
-def main() -> None:
+def regenerate() -> Path:
+    """Regenera el HTML del panel con los mensajes actuales. No abre nada (para uso automático)."""
     database.init_db()
     messages = database.list_landing_messages(limit=200)
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(render(messages), encoding="utf-8")
-    subprocess.run(["open", str(OUT_PATH)])
-    print(f"Panel generado: {OUT_PATH} ({len(messages)} mensajes)")
+    return OUT_PATH
+
+
+def main() -> None:
+    out_path = regenerate()
+    subprocess.run(["open", str(out_path)])
+    print(f"Panel generado: {out_path}")
 
 
 if __name__ == "__main__":

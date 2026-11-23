@@ -30,6 +30,7 @@ if str(PROJECT_ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 import database  # noqa: E402
+import panel_mensajes  # noqa: E402
 
 
 def load_env_file() -> dict[str, str]:
@@ -548,6 +549,7 @@ def sync_landing_messages(max_messages: int = 40) -> dict[str, object]:
         except Exception as exc:
             return {"imap_ready": True, "error": str(exc), "checked": checked, "new_messages": new_messages}
 
+        panel_mensajes.regenerate()
         return {"imap_ready": True, "checked": checked, "new_messages": new_messages}
 
 
