@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS agent_log (
     fecha TEXT, lead_id INTEGER, turno INTEGER, modelo TEXT,
     herramienta TEXT, argumentos TEXT, resultado TEXT,
     tokens_entrada INTEGER DEFAULT 0, tokens_salida INTEGER DEFAULT 0,
+    tokens_cache_creacion INTEGER DEFAULT 0, tokens_cache_lectura INTEGER DEFAULT 0,
+    costo_usd REAL DEFAULT 0.0,
     bloqueado_por_guarda TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_agent_log_fecha ON agent_log(fecha);
@@ -60,10 +62,35 @@ def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+# Columnas agregadas después de la primera versión de la tabla. Se añaden con ALTER TABLE
+# para no tocar los datos que ya están en data/el_socio.db.
+_MIGRACIONES = {
+    "agent_log": [
+        ("tokens_cache_creacion", "INTEGER DEFAULT 0"),
+        ("tokens_cache_lectura", "INTEGER DEFAULT 0"),
+        ("costo_usd", "REAL DEFAULT 0.0"),
+    ],
+}
+
+
+def _migrar_columnas(conn: sqlite3.Connection) -> None:
+    for tabla, columnas in _MIGRACIONES.items():
+        existe = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (tabla,)
+        ).fetchone()
+        if not existe:
+            continue
+        actuales = {r[1] for r in conn.execute(f"PRAGMA table_info({tabla})").fetchall()}
+        for nombre, definicion in columnas:
+            if nombre not in actuales:
+                conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {nombre} {definicion}")
+
+
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
         conn.executescript(SCHEMA)
+        _migrar_columnas(conn)
 
 
 def _conn() -> sqlite3.Connection:
@@ -165,6 +192,9 @@ def mark_lead_bounced(email: str, reason: str = "") -> None:
 
 
 def enqueue_email(*, recipient: str, subject: str, body: str, nicho: str = "", scheduled_for: str | None = None) -> int:
+    # Normalizado siempre: si no, already_emailed_today y cancel_pending_outbox_for_recipient
+    # (que comparan en minúsculas) no encuentran la fila.
+    recipient = recipient.lower().strip()
     with _conn() as conn:
         cur = conn.execute(
             "INSERT INTO outbox (recipient, subject, body, channel, nicho, scheduled_for, status, created_at) "
@@ -298,17 +328,32 @@ def import_uncontacted_prospects_from_csv(csv_path: Path, max_new: int) -> dict:
 def log_agent_action(
     *, lead_id: int | None, turno: int, modelo: str, herramienta: str,
     argumentos: str = "", resultado: str = "", tokens_entrada: int = 0,
-    tokens_salida: int = 0, bloqueado_por_guarda: str = "",
+    tokens_salida: int = 0, tokens_cache_creacion: int = 0, tokens_cache_lectura: int = 0,
+    costo_usd: float = 0.0, bloqueado_por_guarda: str = "",
 ) -> int:
     """Una fila por cada cosa que hace el agente. Nunca guardar secretos aquí."""
     with _conn() as conn:
         cur = conn.execute(
             "INSERT INTO agent_log (fecha, lead_id, turno, modelo, herramienta, argumentos, "
-            "resultado, tokens_entrada, tokens_salida, bloqueado_por_guarda) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "resultado, tokens_entrada, tokens_salida, tokens_cache_creacion, "
+            "tokens_cache_lectura, costo_usd, bloqueado_por_guarda) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (_now(), lead_id, turno, modelo, herramienta, argumentos[:2000], resultado[:2000],
-             tokens_entrada, tokens_salida, bloqueado_por_guarda),
+             tokens_entrada, tokens_salida, tokens_cache_creacion, tokens_cache_lectura,
+             float(costo_usd), bloqueado_por_guarda),
         )
         return int(cur.lastrowid)
+
+
+def agent_cost_today_usd() -> float:
+    """Lo que el agente ya gastó hoy en USD. Es el tope duro del saldo."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(costo_usd),0) AS usd FROM agent_log WHERE fecha LIKE ?",
+            (f"{today}%",),
+        ).fetchone()
+        return float(row["usd"])
 
 
 def agent_tokens_today() -> dict[str, int]:
