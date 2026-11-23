@@ -55,6 +55,19 @@ CREATE TABLE IF NOT EXISTS agent_followups (
     estado TEXT DEFAULT 'pendiente', created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_agent_followups_estado ON agent_followups(estado, programado_para);
+CREATE TABLE IF NOT EXISTS content_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tipo TEXT NOT NULL DEFAULT 'post',
+    nicho TEXT DEFAULT '',
+    gancho TEXT NOT NULL,
+    guion TEXT DEFAULT '',
+    caption TEXT DEFAULT '',
+    estado TEXT NOT NULL DEFAULT 'borrador',
+    archivo TEXT DEFAULT '',
+    nota TEXT DEFAULT '',
+    created_at TEXT, updated_at TEXT, published_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_content_queue_estado ON content_queue(estado, created_at);
 """
 
 
@@ -493,3 +506,91 @@ def summarize_silent_sent_batches(*, dias: int = 7) -> list[dict]:
             (corte,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+
+# ------------------------------------------------------- cola de contenido (redes)
+
+# Un estado por etapa real de la pieza. `descartado` y `publicado` son finales.
+CONTENT_ESTADOS = ("borrador", "aprobado", "generado", "publicado", "descartado")
+CONTENT_TIPOS = ("post", "video")
+
+
+def enqueue_content(
+    *, tipo: str, gancho: str, guion: str = "", caption: str = "",
+    nicho: str = "", nota: str = "",
+) -> int:
+    """Mete una pieza en la cola como `borrador`. No valida la guarda de precios:
+    eso lo hace `content_manager`, que es el único que debe encolar."""
+    tipo = (tipo or "post").strip().lower()
+    if tipo not in CONTENT_TIPOS:
+        raise ValueError(f"tipo inválido: {tipo!r}")
+    gancho = (gancho or "").strip()
+    if not gancho:
+        raise ValueError("el gancho no puede ir vacío")
+    now = _now()
+    with _conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO content_queue (tipo, nicho, gancho, guion, caption, estado, "
+            "nota, created_at, updated_at) VALUES (?,?,?,?,?,'borrador',?,?,?)",
+            (tipo, nicho, gancho, guion, caption, nota, now, now),
+        )
+        return int(cur.lastrowid)
+
+
+def get_content(content_id: int) -> dict | None:
+    with _conn() as conn:
+        row = conn.execute("SELECT * FROM content_queue WHERE id=?", (int(content_id),)).fetchone()
+        return dict(row) if row else None
+
+
+def list_content(*, estado: str = "", limit: int = 100) -> list[dict]:
+    with _conn() as conn:
+        if estado:
+            rows = conn.execute(
+                "SELECT * FROM content_queue WHERE estado=? ORDER BY id DESC LIMIT ?",
+                (estado, int(limit)),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM content_queue ORDER BY id DESC LIMIT ?", (int(limit),)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_content(
+    content_id: int, *, estado: str | None = None, archivo: str | None = None,
+    nota: str | None = None,
+) -> dict | None:
+    """Cambia estado/archivo/nota de una pieza. `publicado` sella `published_at`."""
+    if estado is not None and estado not in CONTENT_ESTADOS:
+        raise ValueError(f"estado inválido: {estado!r}")
+    campos, valores = [], []
+    if estado is not None:
+        campos.append("estado=?")
+        valores.append(estado)
+        if estado == "publicado":
+            campos.append("published_at=?")
+            valores.append(_now())
+    if archivo is not None:
+        campos.append("archivo=?")
+        valores.append(archivo)
+    if nota is not None:
+        campos.append("nota=?")
+        valores.append(nota)
+    if not campos:
+        return get_content(content_id)
+    campos.append("updated_at=?")
+    valores.append(_now())
+    valores.append(int(content_id))
+    with _conn() as conn:
+        conn.execute(f"UPDATE content_queue SET {', '.join(campos)} WHERE id=?", valores)
+    return get_content(content_id)
+
+
+def count_content_by_estado() -> dict[str, int]:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT estado, COUNT(*) AS n FROM content_queue GROUP BY estado"
+        ).fetchall()
+        return {r["estado"]: int(r["n"]) for r in rows}

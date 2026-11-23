@@ -7,6 +7,7 @@ Nunca se sube a Git ni se publica — es solo para ver en tu Mac.
 
 from __future__ import annotations
 
+import html
 import subprocess
 import sys
 from pathlib import Path
@@ -26,18 +27,55 @@ ESTADO_COLOR = {
 }
 
 
-def render(messages: list[dict]) -> str:
+CONTENIDO_COLOR = {
+    "borrador": "#6e6e73",
+    "aprobado": "#4a7c59",
+    "generado": "#2f6f9f",
+    "publicado": "#9c1c2e",
+    "descartado": "#3a3a3e",
+}
+
+
+def render_contenido(piezas: list[dict]) -> str:
+    if not piezas:
+        return ('<tr><td colspan="4" class="empty">'
+                'Todavía no hay piezas en la cola de contenido.</td></tr>')
+    filas = ""
+    for p in piezas:
+        color = CONTENIDO_COLOR.get(p["estado"], "#6e6e73")
+        gancho = html.escape(str(p["gancho"] or ""))
+        tipo = html.escape(str(p["tipo"] or ""))
+        estado = html.escape(str(p["estado"] or ""))
+        archivo = html.escape(Path(str(p["archivo"] or "")).name)
+        filas += f"""
+        <tr>
+          <td class="fecha">#{int(p['id'])}</td>
+          <td class="mensaje">{gancho}</td>
+          <td class="fecha">{tipo}{' · ' + archivo if archivo else ''}</td>
+          <td><span class="badge" style="background:{color}">{estado}</span></td>
+        </tr>"""
+    return filas
+
+
+def render(messages: list[dict], piezas: list[dict] | None = None) -> str:
     rows = ""
     if not messages:
         rows = '<tr><td colspan="3" class="empty">Todavía no ha llegado ningún mensaje.</td></tr>'
     for m in messages:
         color = ESTADO_COLOR.get(m["estado"], "#9c1c2e")
+        # Todo lo que venga de fuera se escapa: el mensaje lo escribe un desconocido
+        # en la landing y sin esto un <script> suyo correría en el panel de Raymond.
+        fecha = html.escape(str(m["received_at"] or ""))
+        mensaje = html.escape(str(m["mensaje"] or ""))
+        estado = html.escape(str(m["estado"] or ""))
         rows += f"""
         <tr>
-          <td class="fecha">{m['received_at']}</td>
-          <td class="mensaje">{m['mensaje']}</td>
-          <td><span class="badge" style="background:{color}">{m['estado']}</span></td>
+          <td class="fecha">{fecha}</td>
+          <td class="mensaje">{mensaje}</td>
+          <td><span class="badge" style="background:{color}">{estado}</span></td>
         </tr>"""
+
+    filas_contenido = render_contenido(piezas or [])
 
     return f"""<!DOCTYPE html>
 <html lang="es">
@@ -76,6 +114,15 @@ def render(messages: list[dict]) -> str:
       {rows}
     </table>
   </div>
+
+  <h1 style="margin-top:44px">Cola de contenido</h1>
+  <div class="sub">Piezas de Instagram: borrador → aprobado → generado → publicado.</div>
+  <div class="table-wrap">
+    <table>
+      <tr><th>#</th><th>Gancho</th><th>Tipo</th><th>Estado</th></tr>
+      {filas_contenido}
+    </table>
+  </div>
 </div>
 </body>
 </html>"""
@@ -85,8 +132,9 @@ def regenerate() -> Path:
     """Regenera el HTML del panel con los mensajes actuales. No abre nada (para uso automático)."""
     database.init_db()
     messages = database.list_landing_messages(limit=200)
+    piezas = database.list_content(limit=100)
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUT_PATH.write_text(render(messages), encoding="utf-8")
+    OUT_PATH.write_text(render(messages, piezas), encoding="utf-8")
     return OUT_PATH
 
 
