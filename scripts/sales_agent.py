@@ -135,11 +135,14 @@ PATRONES_GUARDA: list[tuple[str, str]] = [
     ("moneda_escrita", r"\b(cop|usd|eur|pesos?|dolares?|dolar|euros?)\b"),
     # palabras de precio
     ("palabra_precio", r"\b(precio|precios|vale|valen|valor(?:es)?|cuesta|cuestan|costo|costos|"
-                       r"tarifa|tarifas|cobro|cobramos|cobrar|anticipo|abono|presupuesto|cotizacion|"
-                       r"descuento|promocion)\b"),
+                       r"tarifa|tarifas|cobro|cobra|cobre|cobrando|cobramos|cobrar|anticipo|abono|"
+                       r"presupuesto|cotizacion|descuento|promocion)\b"),
     # cifras
     ("cifra_con_escala", rf"(?:\d[\d.,]*|{_NUMERAL_LETRAS})\s*(?:mil|millon|millones)\b"),
-    ("cifra_separada", r"\b\d{1,3}[.,]\d{3}\b"),
+    # Separador de miles: punto, coma o espacio ("50.000", "50,000", "50 000").
+    ("cifra_separada", "\\b\\d{1,3}[.,\u00a0 ]\\d{3}\\b"),
+    # identidad.md prohíbe dar porcentajes: "20%", "20 por ciento".
+    ("porcentaje_numerico", r"\b\d+\s*(?:%|por\s+ciento\b)"),
     ("cifra_abreviada", r"\b\d+\s*(?:k|m|mm)\b"),
     # Entero pegado sin separador: 25000, 50000, 120000. En el cuerpo nunca van teléfonos
     # ni precios: la firma la agrega el dispatcher después, no el modelo.
@@ -147,8 +150,8 @@ PATRONES_GUARDA: list[tuple[str, str]] = [
     # métodos y pasarelas de pago
     ("metodo_pago", r"\b(nequi|daviplata|wompi|mercado\s?pago|mercadopago|payu|payu\s?latam|stripe|"
                     r"paypal|pse|bancolombia|bancolombia\s?a\s?la\s?mano|davivienda|epayco|addi|bold|"
-                    r"transfiya|efecty|giro|consignacion|consignar|cuenta\s?de\s?ahorros|cuenta\s?corriente|"
-                    r"link\s?de\s?pago|pasarela)\b"),
+                    r"transfiya|transferencia|transferir|bre[\s-]?b|efecty|giro|consignacion|consignar|"
+                    r"cuenta\s?de\s?ahorros|cuenta\s?corriente|link\s?de\s?pago|pasarela)\b"),
 ]
 
 # Acortadores y pasarelas de cobro: se bloquean incluso sin ruta.
@@ -168,7 +171,7 @@ _RE_ENLACE = re.compile(
     r"(?:(?:https?:)?//)?"                              # esquema opcional
     r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}"   # dominio.tld
     r"(?::\d{2,5})?"                                    # puerto
-    r"(?:/[^\s<>\"')]*)?",                              # ruta opcional
+    r"(?:[/?][^\s<>\"')]*)?",                           # ruta o query ("evil.com?a=1")
     re.IGNORECASE,
 )
 
@@ -204,21 +207,48 @@ def _links_externos(texto: str) -> list[str]:
             continue
         bajo = bruto.lower()
         tiene_esquema = "//" in bajo[:10]
-        tiene_ruta = "/" in bajo.split("//", 1)[-1]
+        resto = bajo.split("//", 1)[-1]
+        tiene_ruta = "/" in resto
+        # Un link puede llevar query sin barra: "evil.com?a=1" también es un link.
+        tiene_query = "?" in resto
         etiqueta = host.split(".")[0]
         sospechoso = (host in HOSTS_BLOQUEADOS
                       or any(host.endswith("." + h) for h in HOSTS_BLOQUEADOS)
                       or etiqueta in SUBDOMINIOS_DE_COBRO)
-        if tiene_esquema or tiene_ruta or sospechoso or bajo.startswith("www."):
+        if tiene_esquema or tiene_ruta or tiene_query or sospechoso or bajo.startswith("www."):
             fuera.append(bruto)
     return fuera
 
 
+# Del link propio solo es inofensivo el esquema + host + los dígitos del path
+# (`https://wa.me/573001112233`). Todo lo que venga después se sigue revisando.
+_RE_PARTE_INOFENSIVA = re.compile(r"^(?:(?:https?:)?//)?[^/?#]+(?:/[0-9/]*)?")
+
+
+def _cola_legible(cola: str) -> str:
+    """La cola de un link propio se vuelve palabras sueltas para poder revisarla.
+
+    Sin esto, `?text=pagar_50000_nequi` se esconde: el '_' es carácter de palabra y
+    rompe los `\b` de los patrones, así que ni la cifra ni el 'nequi' se verían.
+    """
+    if not cola:
+        return ""
+    crudo = urllib.parse.unquote_plus(cola)
+    return " " + re.sub(r"[^a-z0-9]+", " ", crudo, flags=re.IGNORECASE).strip() + " "
+
+
 def _sin_links_permitidos(texto: str) -> str:
-    """Saca los links propios antes de contar cifras: wa.me/573001112233 no es un precio."""
+    """Saca el host de los links propios antes de contar cifras: wa.me/573001112233 no es
+    un precio. La query SÍ se conserva (legible): ahí se pueden esconder cifras y pagos.
+    """
     def _reemplazo(hallado):
-        bruto = hallado.group(0).rstrip(".,;:!?)")
-        return " enlace_oficial " if _host_permitido(_hostname(bruto)) else hallado.group(0)
+        bruto = hallado.group(0)
+        recortado = bruto.rstrip(".,;:!?)")
+        if not _host_permitido(_hostname(recortado)):
+            return bruto
+        inofensiva = _RE_PARTE_INOFENSIVA.match(recortado)
+        corte = inofensiva.end() if inofensiva else len(recortado)
+        return " enlace_oficial " + _cola_legible(recortado[corte:]) + bruto[len(recortado):]
     return _RE_ENLACE.sub(_reemplazo, texto)
 
 
@@ -271,15 +301,41 @@ _SENALES_PIDE_BAJA = (
     "dejen de escribirme", "deja de escribirme", "dejenme en paz", "es spam", "esto es spam",
     "desuscribir", "desuscribeme", "unsubscribe", "remove me",
 )
-_RE_PALABRA_BAJA = re.compile(r"\b(?:baja|bajar?me|unsubscribe|stop)\b")
+# Palabras que por sí solas son un opt-out, pero SOLO si son todo el mensaje: en una frase
+# normal son cualquier cosa ("foto de baja resolución", "planta baja", "video stop motion").
+_PALABRAS_OPT_OUT_SOLAS = ("baja", "bajame", "bajarme", "stop", "unsubscribe", "remove")
+# Cortesías que no cambian el sentido de un "BAJA" a secas. Las más largas van primero.
+_CORTESIAS_BREVES = tuple(sorted(
+    ("por favor", "porfavor", "porfa", "muchas gracias", "gracias", "please", "thanks",
+     "thank you", "hola", "buenos dias", "buenas tardes", "buenas noches", "buenas", "saludos"),
+    key=len, reverse=True,
+))
+MAX_PALABRAS_OPT_OUT = 4
+
+
+def _es_opt_out_corto(plano: str) -> bool:
+    """True si TODO el mensaje es un opt-out de una palabra: 'BAJA', 'baja.', 'baja por favor'."""
+    palabras = re.findall(r"[a-z0-9]+", plano)
+    if not palabras or len(palabras) > MAX_PALABRAS_OPT_OUT:
+        return False
+    limpio = " ".join(palabras)
+    for cortesia in _CORTESIAS_BREVES:
+        limpio = limpio.replace(cortesia, " ")
+    restantes = limpio.split()
+    return len(restantes) == 1 and restantes[0] in _PALABRAS_OPT_OUT_SOLAS
 
 
 def pide_la_baja(mensaje: str) -> bool:
-    """True si el lead pidió que no se le vuelva a escribir."""
+    """True si el lead pidió que no se le vuelva a escribir.
+
+    Las frases explícitas valen en cualquier parte del mensaje. Las palabras sueltas
+    ('baja', 'stop') solo valen si son el mensaje entero, para no leer una baja en
+    'tengo una foto de baja resolución' o 'render de la planta baja'.
+    """
     plano = _plano(mensaje or "")
     if any(s in plano for s in _SENALES_PIDE_BAJA):
         return True
-    return bool(_RE_PALABRA_BAJA.search(plano))
+    return _es_opt_out_corto(plano)
 
 
 # ------------------------------------------------------------------ definición de herramientas
@@ -714,6 +770,19 @@ class AgenteVentas:
     # --- loop -----------------------------------------------------------
 
     def correr(self, *, lead_email: str, mensaje_lead: str = "", nicho: str = "") -> dict:
+        # La baja va PRIMERO, antes de los topes y de exigir la API key: dar de baja cuesta
+        # 0 USD y 0 correos, y a nadie se le puede negar por un tope diario. No se crea el
+        # lead si no existe: solo se cierra el que ya está en la BD.
+        if mensaje_lead.strip() and pide_la_baja(mensaje_lead):
+            self.lead = (
+                {"id": None, "email": lead_email.lower().strip(), "company": "", "nicho": nicho,
+                 "stage": "nuevo_lead", "notes": "", "bounced": 0}
+                if self.dry_run else database.get_lead_by_email(lead_email)
+            )
+            self._dar_de_baja("lo pidió en su mensaje")
+            return {"ok": True, "motivo": "baja_pedida_por_el_lead", "acciones": self.acciones,
+                    "costo_usd": 0.0, "turnos": 0}
+
         bloqueo = self.guardas_previas()
         if bloqueo:
             return {"ok": False, "motivo": bloqueo, "acciones": [], "costo_usd": 0.0, "turnos": 0}
@@ -726,12 +795,6 @@ class AgenteVentas:
             self._log("rechazo_lead_cerrado", resultado=cerrado)
             self.acciones.append(cerrado)
             return {"ok": False, "motivo": cerrado, "acciones": self.acciones,
-                    "costo_usd": 0.0, "turnos": 0}
-
-        # Si pidió la baja, se le da de baja en código y no se gasta ni un token.
-        if mensaje_lead.strip() and pide_la_baja(mensaje_lead):
-            self._dar_de_baja("lo pidió en su mensaje")
-            return {"ok": True, "motivo": "baja_pedida_por_el_lead", "acciones": self.acciones,
                     "costo_usd": 0.0, "turnos": 0}
 
         es_frio = not mensaje_lead.strip()

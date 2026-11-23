@@ -25,6 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
+import autopilot_dispatcher  # noqa: E402
 import database  # noqa: E402
 import sales_agent  # noqa: E402
 
@@ -171,6 +172,12 @@ class TestGuardaDePrecios(unittest.TestCase):
         "25000", "120000", "son 3 millones", "cuesta poco", "COP 40.000",
         "checkout.stripe.com/abc", "tinyurl.com/x9", "wa.link/pagar", "paypal.me/alguien",
         "www.otrositio.com", "mi numero es 3001234567",
+        # hallazgos del Paso 4: espacio como separador, porcentajes, transferencias,
+        # Bre-B, link con query sin barra y query escondida en un link propio.
+        "50 000", "120 000", "te doy 50%", "un 20 por ciento", "te hago una transferencia",
+        "puedes transferir cuando quieras", "pagas por bre-b", "pagas por breb",
+        "pagas por bre b", "ella cobra aparte", "ya me estan cobrando", "evil.com?a=1",
+        "https://wa.me/573001112233?text=pagar_50000_nequi",
     ]
     PERMITIDOS = [
         "Mil gracias", "web oficial",
@@ -179,6 +186,7 @@ class TestGuardaDePrecios(unittest.TestCase):
         "Escribeme por https://wa.me/573001112233",
         "Mil gracias por responder, te mando 3 opciones de render.",
         "En 2026 arrancamos con el catalogo",
+        "Escribeme a https://wa.me/573001112233 cuando quieras",
     ]
 
     def test_bloquea_cifras_links_y_metodos_de_pago(self) -> None:
@@ -204,6 +212,71 @@ class TestGuardaDePrecios(unittest.TestCase):
     def test_la_guarda_tambien_mira_el_asunto(self) -> None:
         motivos = sales_agent.revisar_guarda_precios("Promocion: 50000", "Hola, un gusto saludarte.")
         self.assertTrue(motivos)
+
+
+class TestHallazgosDeLaGuarda(unittest.TestCase):
+    """Los huecos que encontró la auditoría del Paso 4, uno por uno."""
+
+    def test_el_link_propio_limpio_sigue_pasando(self) -> None:
+        self.assertEqual(sales_agent.revisar_guarda_precios("https://wa.me/573001112233"), [])
+        self.assertEqual(sales_agent._links_externos("https://wa.me/573001112233"), [])
+
+    def test_la_query_de_un_link_propio_no_es_un_escondite(self) -> None:
+        motivos = sales_agent.revisar_guarda_precios(
+            "Escribeme a https://wa.me/573001112233?text=pagar_50000_nequi")
+        self.assertTrue(motivos, "la query del link propio se saltó la guarda")
+        self.assertTrue(any("50000" in m or "nequi" in m for m in motivos), motivos)
+
+    def test_el_host_propio_si_se_borra_para_contar_cifras(self) -> None:
+        limpio = sales_agent._sin_links_permitidos("ver https://wa.me/573001112233 ya")
+        self.assertNotIn("573001112233", limpio)
+        self.assertIn("enlace_oficial", limpio)
+
+    def test_un_link_con_query_sin_barra_es_un_link(self) -> None:
+        self.assertEqual(sales_agent._links_externos("mira evil.com?a=1"), ["evil.com?a=1"])
+
+    def test_espacio_como_separador_de_miles(self) -> None:
+        for texto in ("50 000", "120 000"):
+            with self.subTest(texto=texto):
+                self.assertTrue(sales_agent.revisar_guarda_precios(texto))
+
+    def test_bloquea_porcentajes(self) -> None:
+        for texto in ("te doy 50%", "un 20 por ciento de descuento", "30 %"):
+            with self.subTest(texto=texto):
+                self.assertTrue(sales_agent.revisar_guarda_precios(texto))
+
+
+class TestFalsosPositivosDeBaja(unittest.TestCase):
+    """'baja' y 'stop' dentro de una frase normal NO son una baja."""
+
+    NO_SON_BAJA = (
+        "Tengo una foto de baja resolución",
+        "Render para la planta baja",
+        "Jeans cintura baja",
+        "Video stop motion",
+        "La temporada baja nos conviene mejor",
+        "planta baja",
+        "cintura baja",
+        "Me interesa, cuentame mas",
+        "",
+    )
+    SI_SON_BAJA = (
+        "BAJA", "baja", "baja.", "baja por favor", "Baja, gracias", "stop", "STOP",
+        "darme de baja", "no me escriban", "unsubscribe", "esto es spam", "remove me",
+        "Por favor dejen de escribirme",
+    )
+
+    def test_no_lee_una_baja_donde_no_hay(self) -> None:
+        for texto in self.NO_SON_BAJA:
+            with self.subTest(texto=texto):
+                self.assertFalse(sales_agent.pide_la_baja(texto),
+                                 f"falso positivo de baja: {texto!r}")
+
+    def test_sigue_detectando_las_bajas_de_verdad(self) -> None:
+        for texto in self.SI_SON_BAJA:
+            with self.subTest(texto=texto):
+                self.assertTrue(sales_agent.pide_la_baja(texto),
+                                f"no detectó la baja: {texto!r}")
 
 
 class TestGuardaAlEncolar(BaseConBDTemporal):
@@ -517,6 +590,347 @@ class TestCostoYPrompt(unittest.TestCase):
             with self.subTest(h=h["name"]):
                 self.assertTrue(h["name"].isascii())
                 self.assertTrue(h["name"].replace("_", "").isalnum())
+
+
+# --------------------------------------------------------------- 9. la baja va antes de los topes
+
+class TestLaBajaNoDependeDeLosTopes(BaseConBDTemporal):
+    """Dar de baja cuesta 0 USD y 0 correos: ningún tope puede impedirlo."""
+
+    def _esperar_baja(self, lead: dict, resultado: dict) -> None:
+        self.assertTrue(resultado["ok"], resultado)
+        self.assertEqual(resultado["motivo"], "baja_pedida_por_el_lead")
+        self.assertEqual(resultado["costo_usd"], 0.0)
+        self.assertEqual(database.get_lead_by_email(lead["email"])["stage"], "baja")
+        self.assertEqual(self.estados_outbox(lead["email"]), ["cancelled"])
+        self.assertEqual(self.estados_followups(lead["id"]), ["cancelado"])
+
+    def _lead_con_pendientes(self) -> dict:
+        lead = self.crear_lead()
+        database.enqueue_email(recipient=lead["email"], subject="x", body="y")
+        database.schedule_followup(lead["id"], 3, "insistir")
+        return lead
+
+    def test_se_procesa_con_el_tope_de_correos_lleno(self) -> None:
+        lead = self._lead_con_pendientes()
+        for _ in range(15):
+            database.log_agent_action(lead_id=lead["id"], turno=1, modelo="claude-sonnet-5",
+                                      herramienta="enviar_correo", resultado="encolado")
+        self.assertEqual(database.agent_emails_queued_today(), 15)
+        with mock.patch.object(sales_agent, "llamar_api",
+                               side_effect=AssertionError("llamó a la API para dar de baja")) as api:
+            resultado = self.agente().correr(lead_email=lead["email"], mensaje_lead="BAJA")
+        self.assertEqual(api.call_count, 0)
+        self._esperar_baja(lead, resultado)
+
+    def test_se_procesa_con_el_tope_de_usd_lleno(self) -> None:
+        lead = self._lead_con_pendientes()
+        database.log_agent_action(lead_id=lead["id"], turno=1, modelo="claude-sonnet-5",
+                                  herramienta="llamada_api", costo_usd=0.50)
+        resultado = self.agente().correr(lead_email=lead["email"],
+                                         mensaje_lead="Quiero darme de baja, gracias.")
+        self._esperar_baja(lead, resultado)
+
+    def test_se_procesa_sin_api_key(self) -> None:
+        lead = self._lead_con_pendientes()
+        agente = sales_agent.AgenteVentas(dict(CFG_FALSA, ANTHROPIC_API_KEY=""))
+        self._esperar_baja(lead, agente.correr(lead_email=lead["email"], mensaje_lead="stop"))
+
+    def test_en_dry_run_la_baja_no_toca_la_bd(self) -> None:
+        lead = self._lead_con_pendientes()
+        resultado = self.agente(dry_run=True).correr(lead_email=lead["email"], mensaje_lead="BAJA")
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(resultado["motivo"], "baja_pedida_por_el_lead")
+        self.assertEqual(database.get_lead_by_email(lead["email"])["stage"], "nuevo_lead")
+        self.assertEqual(self.estados_outbox(lead["email"]), ["pending"])
+        self.assertEqual(self.estados_followups(lead["id"]), ["pendiente"])
+
+    def test_una_baja_de_alguien_que_no_esta_en_la_bd_no_crea_el_lead(self) -> None:
+        resultado = self.agente().correr(lead_email="desconocido@ejemplo.com", mensaje_lead="BAJA")
+        self.assertTrue(resultado["ok"])
+        self.assertIsNone(database.get_lead_by_email("desconocido@ejemplo.com"))
+
+
+# --------------------------------------------------------------- 10. enganche en el dispatcher
+
+class TestClasificacionDeBaja(unittest.TestCase):
+    def test_el_dispatcher_clasifica_la_baja(self) -> None:
+        for cuerpo in ("BAJA", "baja por favor", "darme de baja", "no me escriban mas"):
+            with self.subTest(cuerpo=cuerpo):
+                self.assertEqual(
+                    autopilot_dispatcher.classify_reply_intent("Re: propuesta", cuerpo), "baja")
+
+    def test_no_clasifica_baja_una_frase_normal(self) -> None:
+        intent = autopilot_dispatcher.classify_reply_intent(
+            "Re: render", "Tengo una foto de baja resolución, sirve?")
+        self.assertNotEqual(intent, "baja")
+
+    def test_un_autorespondedor_no_es_una_baja(self) -> None:
+        intent = autopilot_dispatcher.classify_reply_intent(
+            "Fuera de oficina", "Estoy fuera de oficina. unsubscribe")
+        self.assertEqual(intent, "respuesta_automatica")
+
+
+class BaseDispatcherEnSeco(BaseConBDTemporal):
+    """BD temporal + cero red: SMTP, IMAP y la API quedan mockeados."""
+
+    CFG_SMTP = {
+        "SMTP_HOST": "smtp.ejemplo.com", "SMTP_PORT": "587", "SMTP_USER": "yo@ejemplo.com",
+        "SMTP_PASS": "x", "SMTP_FROM": "yo@ejemplo.com", "MAX_DAILY_EMAILS": "15",
+    }
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.cfg = dict(self.CFG_SMTP)
+        self.parche_env = mock.patch.object(autopilot_dispatcher, "load_env_file",
+                                            side_effect=lambda: dict(self.cfg))
+        self.parche_smtp = mock.patch.object(autopilot_dispatcher, "send_smtp_email")
+        self.parche_notif_d = mock.patch.object(autopilot_dispatcher, "notify_mac_desktop",
+                                                return_value=True)
+        self.parche_cal_d = mock.patch.object(autopilot_dispatcher, "create_calendar_event",
+                                              return_value=True)
+        self.parche_env.start()
+        self.smtp = self.parche_smtp.start()
+        self.parche_notif_d.start()
+        self.parche_cal_d.start()
+        for parche in (self.parche_cal_d, self.parche_notif_d, self.parche_smtp, self.parche_env):
+            self.addCleanup(parche.stop)
+
+
+class TestDobleSeguroAlEnviar(BaseDispatcherEnSeco):
+    def test_no_envia_a_un_lead_que_paso_a_baja_y_cancela_el_job(self) -> None:
+        for email, stage, rebotado in (("b@ejemplo.com", "baja", False),
+                                       ("n@ejemplo.com", "no_interesado", False),
+                                       ("r@ejemplo.com", "nuevo_lead", True)):
+            with self.subTest(email=email):
+                self.crear_lead(email=email, stage=stage)
+                if rebotado:
+                    database.mark_lead_bounced(email, "550 user unknown")
+                database.enqueue_email(recipient=email, subject="Hola", body="Te escribo.")
+                res = autopilot_dispatcher.dispatch_due_jobs()
+                self.assertEqual(res["sent"], 0, "le envió a un lead cerrado")
+                self.assertEqual(self.estados_outbox(email), ["cancelled"])
+        self.assertEqual(self.smtp.call_count, 0)
+
+    def test_al_lead_activo_si_le_envia(self) -> None:
+        self.crear_lead(email="ok@ejemplo.com", stage="nuevo_lead")
+        database.enqueue_email(recipient="ok@ejemplo.com", subject="Hola", body="Te escribo.")
+        res = autopilot_dispatcher.dispatch_due_jobs()
+        self.assertEqual(res["sent"], 1, res)
+        self.assertEqual(res["cancelled_closed_lead"], 0)
+        self.assertEqual(self.smtp.call_count, 1)
+        self.assertEqual(self.estados_outbox("ok@ejemplo.com"), ["sent"])
+
+
+class TestCancelacionDeSeguimientosAlResponder(BaseDispatcherEnSeco):
+    """sync_imap_replies con un IMAP falso: toda respuesta mata los seguimientos."""
+
+    def _correo_falso(self, remitente: str, asunto: str, cuerpo: str) -> bytes:
+        return (f"From: {remitente}\r\nSubject: {asunto}\r\n"
+                f"Message-ID: <{abs(hash(cuerpo))}@ejemplo.com>\r\n"
+                f"Content-Type: text/plain; charset=utf-8\r\n\r\n{cuerpo}\r\n").encode("utf-8")
+
+    def _imap_falso(self, crudo: bytes):
+        imap = mock.MagicMock()
+        imap.__enter__.return_value = imap
+        imap.__exit__.return_value = False
+        imap.search.return_value = ("OK", [b"1"])
+        imap.fetch.return_value = ("OK", [(b"1 (RFC822 {0}", crudo)])
+        return imap
+
+    def _sincronizar(self, cuerpo: str, *, con_api_key: bool = False) -> dict:
+        self.cfg.update({"IMAP_HOST": "imap.ejemplo.com"})
+        if con_api_key:
+            self.cfg["ANTHROPIC_API_KEY"] = "clave-de-prueba-no-sirve"
+        crudo = self._correo_falso("lead@ejemplo.com", "Re: propuesta", cuerpo)
+        with mock.patch.object(autopilot_dispatcher.imaplib, "IMAP4_SSL",
+                               return_value=self._imap_falso(crudo)):
+            return autopilot_dispatcher.sync_imap_replies()
+
+    def test_una_respuesta_cancela_outbox_y_seguimientos(self) -> None:
+        lead = self.crear_lead()
+        database.enqueue_email(recipient=lead["email"], subject="x", body="y")
+        database.schedule_followup(lead["id"], 3, "insistir")
+        res = self._sincronizar("Me interesa, agendemos una llamada.")
+        self.assertEqual(res["matched"], 1, res)
+        self.assertEqual(self.estados_outbox(lead["email"]), ["cancelled"])
+        self.assertEqual(self.estados_followups(lead["id"]), ["cancelado"])
+
+    def test_una_baja_cancela_todo_y_no_llama_al_agente(self) -> None:
+        lead = self.crear_lead()
+        database.enqueue_email(recipient=lead["email"], subject="x", body="y")
+        database.schedule_followup(lead["id"], 3, "insistir")
+        with mock.patch.object(sales_agent, "llamar_api",
+                               side_effect=AssertionError("llamó a la API por una baja")) as api:
+            res = self._sincronizar("BAJA", con_api_key=True)
+        self.assertEqual(api.call_count, 0)
+        self.assertEqual(res["agent_runs"], 0)
+        self.assertEqual(database.get_lead_by_email(lead["email"])["stage"], "baja")
+        self.assertEqual(self.estados_outbox(lead["email"]), ["cancelled"])
+        self.assertEqual(self.estados_followups(lead["id"]), ["cancelado"])
+
+    def test_una_respuesta_interesada_si_invoca_al_agente(self) -> None:
+        self.crear_lead()
+        with mock.patch.object(sales_agent.AgenteVentas, "correr",
+                               return_value={"ok": True}) as correr:
+            res = self._sincronizar("Me interesa, agendemos una llamada.", con_api_key=True)
+        self.assertEqual(res["agent_runs"], 1, res)
+        self.assertEqual(correr.call_count, 1)
+        self.assertEqual(correr.call_args.kwargs["lead_email"], "lead@ejemplo.com")
+
+    def test_sin_api_key_no_se_invoca_al_agente(self) -> None:
+        self.crear_lead()
+        with mock.patch.object(sales_agent.AgenteVentas, "correr") as correr:
+            res = self._sincronizar("Me interesa, agendemos una llamada.")
+        self.assertEqual(correr.call_count, 0)
+        self.assertEqual(res["agent_runs"], 0)
+
+    def test_si_el_agente_revienta_el_sync_sigue_vivo(self) -> None:
+        lead = self.crear_lead()
+        with mock.patch.object(sales_agent.AgenteVentas, "correr",
+                               side_effect=RuntimeError("el agente explotó")):
+            res = self._sincronizar("Me interesa, agendemos una llamada.", con_api_key=True)
+        self.assertEqual(res["matched"], 1, res)
+        self.assertNotIn("error", res)
+        self.assertEqual(res["agent_runs"], 0)
+        self.assertEqual(database.get_lead_by_email(lead["email"])["stage"], "interesado_cita")
+
+
+class TestCicloDelAgente(BaseDispatcherEnSeco):
+    def setUp(self) -> None:
+        super().setUp()
+        self.cfg["ANTHROPIC_API_KEY"] = "clave-de-prueba-no-sirve"
+        # La ventana horaria no puede hacer fallar la batería según la hora del día.
+        self.parche_ventana = mock.patch.object(autopilot_dispatcher, "_is_within_sending_window",
+                                                return_value=True)
+        self.parche_ventana.start()
+        self.addCleanup(self.parche_ventana.stop)
+        # cargar_config leería el .env real: se fuerza la cfg de prueba.
+        self.parche_cfg = mock.patch.object(sales_agent, "cargar_config",
+                                            side_effect=lambda: dict(self.cfg))
+        self.parche_cfg.start()
+        self.addCleanup(self.parche_cfg.stop)
+
+    def _vencer_seguimiento(self, lead_id: int) -> int:
+        fid = database.schedule_followup(lead_id, 1, "insistir")
+        with sqlite3.connect(self.db) as con:
+            con.execute("UPDATE agent_followups SET programado_para='2000-01-01 00:00:00' WHERE id=?",
+                        (fid,))
+        return fid
+
+    def test_sin_api_key_sale_limpio(self) -> None:
+        self.cfg.pop("ANTHROPIC_API_KEY")
+        res = autopilot_dispatcher.run_sales_agent_cycle()
+        self.assertFalse(res["ran"])
+        self.assertEqual(res["reason"], "sin_api_key")
+
+    def test_fuera_de_la_ventana_no_corre(self) -> None:
+        with mock.patch.object(autopilot_dispatcher, "_is_within_sending_window",
+                               return_value=False):
+            res = autopilot_dispatcher.run_sales_agent_cycle()
+        self.assertFalse(res["ran"])
+        self.assertEqual(res["reason"], "outside_window")
+
+    def test_procesa_un_seguimiento_vencido_y_lo_marca_hecho(self) -> None:
+        lead = self.crear_lead(stage="contactado")
+        fid = self._vencer_seguimiento(lead["id"])
+        with mock.patch.object(sales_agent.AgenteVentas, "correr",
+                               return_value={"ok": True}) as correr:
+            res = autopilot_dispatcher.run_sales_agent_cycle()
+        self.assertEqual(res["followups_corridos"], 1, res)
+        self.assertEqual(correr.call_args.kwargs["lead_email"], lead["email"])
+        with sqlite3.connect(self.db) as con:
+            estado = con.execute("SELECT estado FROM agent_followups WHERE id=?", (fid,)).fetchone()[0]
+        self.assertEqual(estado, "hecho")
+
+    def test_un_seguimiento_de_lead_cerrado_se_cancela_sin_api(self) -> None:
+        for email, stage, rebotado in (("b@ejemplo.com", "baja", False),
+                                       ("n@ejemplo.com", "no_interesado", False),
+                                       ("r@ejemplo.com", "contactado", True)):
+            with self.subTest(email=email):
+                lead = self.crear_lead(email=email, stage=stage)
+                if rebotado:
+                    database.mark_lead_bounced(email, "rebote")
+                fid = self._vencer_seguimiento(lead["id"])
+                with mock.patch.object(sales_agent, "llamar_api",
+                                       side_effect=AssertionError("llamó a la API")) as api:
+                    res = autopilot_dispatcher.run_sales_agent_cycle()
+                self.assertEqual(api.call_count, 0)
+                self.assertGreaterEqual(res["followups_cancelados"], 1, res)
+                with sqlite3.connect(self.db) as con:
+                    estado = con.execute("SELECT estado FROM agent_followups WHERE id=?",
+                                         (fid,)).fetchone()[0]
+                self.assertEqual(estado, "cancelado")
+
+    def test_corre_los_leads_nuevos_en_frio_hasta_el_maximo(self) -> None:
+        for i in range(4):
+            self.crear_lead(email=f"frio{i}@ejemplo.com")
+        with mock.patch.object(sales_agent.AgenteVentas, "correr",
+                               return_value={"ok": True}) as correr:
+            res = autopilot_dispatcher.run_sales_agent_cycle(max_leads=2)
+        self.assertEqual(res["leads_en_frio"], 2, res)
+        self.assertEqual(correr.call_count, 2)
+
+    def test_no_toca_un_lead_con_correo_pendiente(self) -> None:
+        self.crear_lead(email="conpendiente@ejemplo.com")
+        database.enqueue_email(recipient="conpendiente@ejemplo.com", subject="x", body="y")
+        with mock.patch.object(sales_agent.AgenteVentas, "correr",
+                               return_value={"ok": True}) as correr:
+            res = autopilot_dispatcher.run_sales_agent_cycle()
+        self.assertEqual(res["leads_en_frio"], 0, res)
+        self.assertEqual(correr.call_count, 0)
+
+    def test_corta_de_inmediato_con_el_tope_de_correos_lleno(self) -> None:
+        self.crear_lead()
+        for _ in range(15):
+            database.log_agent_action(lead_id=1, turno=1, modelo="claude-sonnet-5",
+                                      herramienta="enviar_correo", resultado="encolado")
+        with mock.patch.object(sales_agent.AgenteVentas, "correr") as correr:
+            res = autopilot_dispatcher.run_sales_agent_cycle()
+        self.assertEqual(res["cortado_por"], "tope_correos", res)
+        self.assertEqual(correr.call_count, 0)
+
+    def test_corta_de_inmediato_con_el_tope_de_usd_lleno(self) -> None:
+        self.crear_lead()
+        database.log_agent_action(lead_id=1, turno=1, modelo="claude-sonnet-5",
+                                  herramienta="llamada_api", costo_usd=0.50)
+        with mock.patch.object(sales_agent.AgenteVentas, "correr") as correr:
+            res = autopilot_dispatcher.run_sales_agent_cycle()
+        self.assertEqual(res["cortado_por"], "tope_usd", res)
+        self.assertEqual(correr.call_count, 0)
+
+    def test_en_dry_run_no_marca_el_seguimiento_ni_llama_a_la_api(self) -> None:
+        lead = self.crear_lead(stage="contactado")
+        fid = self._vencer_seguimiento(lead["id"])
+        with mock.patch.object(sales_agent, "llamar_api",
+                               side_effect=AssertionError("el dry-run llamó a la API")) as api:
+            res = autopilot_dispatcher.run_sales_agent_cycle(dry_run=True)
+        self.assertEqual(api.call_count, 0)
+        self.assertTrue(res["dry_run"])
+        self.assertEqual(res["followups_corridos"], 1, res)
+        with sqlite3.connect(self.db) as con:
+            estado = con.execute("SELECT estado FROM agent_followups WHERE id=?", (fid,)).fetchone()[0]
+        self.assertEqual(estado, "pendiente", "el dry-run marcó el seguimiento")
+
+
+class TestCicloDelAgenteNoTocaLaBDReal(unittest.TestCase):
+    """`--run-agent --dry-run` corrido como lo correría Raymond, contra la BD de verdad."""
+
+    def test_cli_run_agent_dry_run_no_modifica_la_bd(self) -> None:
+        antes_huella, antes_filas = huella(DB_REAL), contar_filas(DB_REAL)
+        existia = DB_REAL.exists()
+        proc = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / "scripts" / "autopilot_dispatcher.py"),
+             "--run-agent", "--dry-run"],
+            capture_output=True, text=True, cwd=str(PROJECT_ROOT), timeout=120,
+            env=dict(os.environ, ELSOCIO_QUIET="1"),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        salida = json.loads(proc.stdout)
+        self.assertIn("ran", salida)
+        self.assertEqual(DB_REAL.exists(), existia, "el dry-run creó data/el_socio.db")
+        self.assertEqual(huella(DB_REAL), antes_huella, "el dry-run modificó data/el_socio.db")
+        self.assertEqual(contar_filas(DB_REAL), antes_filas, "el dry-run creó filas")
 
 
 if __name__ == "__main__":

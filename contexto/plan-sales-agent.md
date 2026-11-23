@@ -36,24 +36,46 @@ Nunca lee `contexto/precios-del-dueño.md`. Prompt Caching activo:
   y de USD antes y dentro del loop.
 - Lead en `baja` / `no_interesado` o `bounced=1`: se corta en `correr()` antes de la API y otra vez
   dentro de `enviar_correo`. Nunca se le escribe.
-- Si el mensaje del lead pide la baja ("no me escriban", "baja", "unsubscribe"...), el CÓDIGO le pone
-  etapa `baja` y cancela outbox + seguimientos. No se depende de que el modelo llame `cambiar_etapa`.
+- Si el mensaje del lead pide la baja, el CÓDIGO le pone etapa `baja` y cancela outbox +
+  seguimientos. No se depende de que el modelo llame `cambiar_etapa`. Las frases explícitas
+  ("no me escriban", "darme de baja", "unsubscribe", "esto es spam") valen en cualquier parte;
+  las palabras sueltas `baja` y `stop` SOLO si son el mensaje entero ("BAJA", "baja por favor"),
+  para no leer una baja en "foto de baja resolución", "planta baja" o "video stop motion".
+- La baja se procesa ANTES de los topes diarios y de exigir la API key: cuesta 0 USD y 0 correos.
+  Nunca crea el lead si no existe, y en `--dry-run` no toca la BD.
 - Links: se parsea el hostname con `urllib.parse.urlparse` y se compara EXACTO contra la lista blanca.
   Así caen `pagos.evil.com/?r=reyvonblon.github.io` y `reyvonblon.github.io.evil.com`. También caen
   acortadores y links sin esquema (`mpago.la/x`, `bit.ly/x`, `wa.link/x`, `checkout.*`).
-- Cifras: además de lo anterior, bloquea enteros pegados de 5+ dígitos (`25000`, `50000`). Los links
-  propios se sacan del texto antes de contar, para que `wa.me/573001112233` no cuente como precio.
+- Cifras: además de lo anterior, bloquea enteros pegados de 5+ dígitos (`25000`, `50000`), espacio
+  como separador de miles (`50 000`) y porcentajes (`50%`, `20 por ciento`, prohibidos por
+  `identidad.md`). También `transferencia`/`transferir`, `bre-b` y `cobra`/`cobre`/`cobrando`.
+- De los links propios se borra solo el esquema + host + dígitos del path (`wa.me/573001112233`);
+  la query se CONSERVA y se vuelve legible, así que `wa.me/573001112233?text=pagar_50000_nequi`
+  se bloquea. Un link con query sin barra (`evil.com?a=1`) también cuenta como link.
 - 429/5xx: pausa de `1.5 * (intento + 1)` segundos antes de cada reintento (máximo 2).
 
 ## Checklist de los 6 pasos
 1. [hecho] Contexto y alcance (`MODO_TRABAJO.md`, este archivo).
 2. [hecho] DB: tablas `agent_log` / `agent_followups` + topes + costo en USD.
 3. [hecho] Núcleo de `sales_agent.py` (loop, herramientas, guardas).
-4. [hecho] Pruebas exhaustivas en seco: `scripts/test_sales_agent.py` (35 pruebas, `unittest` de
+4. [hecho] Pruebas exhaustivas en seco: `scripts/test_sales_agent.py` (`unittest` de
    stdlib, BD temporal en /tmp, cero red). Cubre: `--dry-run` no toca `data/el_socio.db` ni llama a la
    API, guarda de precios y links (bloqueados y legítimos), línea de baja automática, duplicados del
    mismo día con mayúsculas, cancelación al dar de baja, leads cerrados/rebotados, topes de 15 correos
    y 0.50 USD verificados antes de la API, corte duro en 6 turnos y 2 reintentos con pausa ante 429.
-   Se corre con `python3 scripts/test_sales_agent.py`.
-5. [pendiente] Enganche en `autopilot_dispatcher.py`.
+   Se corre con `python3 scripts/test_sales_agent.py`. Hoy son 68 pruebas en verde.
+5. [hecho] Enganche en `autopilot_dispatcher.py`:
+   - `classify_reply_intent()` devuelve `baja` cuando el cuerpo limpio dispara `pide_la_baja()`
+     (después del filtro de autorespondedores: un pie con "unsubscribe" no es una baja).
+   - `sync_imap_replies()` cancela outbox Y `agent_followups` ante CUALQUIER respuesta, y corre
+     el agente solo si el intent es `interesado_cita` o `respuesta_recibida` y hay API key, dentro
+     de un `try/except` para que nunca rompa el sync, el aviso del Mac ni el evento de Calendar.
+   - `run_sales_agent_cycle(dry_run=, max_leads=)`: sin API key sale limpio; respeta la ventana
+     horaria; 1º seguimientos vencidos (`cancelado` sin gastar un token si el lead está cerrado o
+     rebotado, `hecho` si corrió), 2º leads nuevos en frío; corta de inmediato ante 15 correos o
+     0.50 USD. En `--dry-run` no escribe nada y no crea la BD.
+   - Doble seguro en `dispatch_due_jobs()`: un job cuyo lead pasó a `baja`/`no_interesado` o
+     rebotó se marca `cancelled` y NO se envía, aunque ya estuviera en la cola.
+   - Flags nuevos: `--run-agent` y `--dry-run`. El `main()` normal corre el ciclo solo si hay
+     `ANTHROPIC_API_KEY`, y si falta no rompe nada.
 6. [pendiente] Escritura automática en `contexto/RESULTADOS_MERCADO.md`.

@@ -146,6 +146,32 @@ def get_lead_by_email(email: str) -> dict | None:
         return dict(row) if row else None
 
 
+def get_lead_by_id(lead_id: int | None) -> dict | None:
+    if lead_id is None:
+        return None
+    with _conn() as conn:
+        row = conn.execute("SELECT * FROM leads WHERE id=?", (lead_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def list_cold_leads_for_agent(limit: int = 5) -> list[dict]:
+    """Leads que el agente puede contactar en frío: nuevos, sin rebote, sin correo pendiente
+    ni enviado hoy. Los más viejos primero, para no dejar a nadie en la cola para siempre.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM leads WHERE stage='nuevo_lead' AND COALESCE(bounced, 0)=0 "
+            "AND email IS NOT NULL AND TRIM(email)!='' "
+            "AND LOWER(TRIM(email)) NOT IN (SELECT recipient FROM outbox WHERE status='pending') "
+            "AND LOWER(TRIM(email)) NOT IN (SELECT recipient FROM outbox WHERE status='sent' "
+            "    AND created_at LIKE ?) "
+            "ORDER BY COALESCE(updated_at, created_at) ASC LIMIT ?",
+            (f"{today}%", max(1, limit)),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def update_lead_stage(lead_id: int, stage: str, *, notes: str | None = None) -> dict | None:
     with _conn() as conn:
         if notes is not None:

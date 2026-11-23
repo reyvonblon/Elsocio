@@ -45,10 +45,45 @@ def load_env_file() -> dict[str, str]:
     for k in (
         "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_FROM",
         "IMAP_HOST", "MAX_DAILY_EMAILS", "FROM_NAME", "WHATSAPP", "WEBSITE",
+        "ANTHROPIC_API_KEY",
     ):
         if os.environ.get(k):
             values[k] = os.environ[k]
     return values
+
+
+def _load_sales_agent():
+    """Import diferido a propósito: `sales_agent` importa este módulo, así que al revés
+    tiene que ser perezoso o se arma un import circular. Si falla, el motor sigue.
+    """
+    try:
+        import sales_agent  # noqa: PLC0415
+        return sales_agent
+    except Exception:
+        return None
+
+
+def _tiene_anthropic_key(cfg: dict[str, str] | None = None) -> bool:
+    cfg = load_env_file() if cfg is None else cfg
+    return bool((cfg.get("ANTHROPIC_API_KEY") or "").strip())
+
+
+# Etapas en las que un lead no vuelve a recibir nada, ni del agente ni del dispatcher.
+ETAPAS_CERRADAS = ("baja", "no_interesado")
+# Respuestas que sí justifican una corrida del agente. Nunca ante una baja, un "no
+# interesado" o un autorespondedor: ahí gastar un token no tiene sentido.
+INTENTS_PARA_EL_AGENTE = ("interesado_cita", "respuesta_recibida")
+
+
+def _lead_esta_cerrado(lead: dict | None) -> bool:
+    if not lead:
+        return False
+    if str(lead.get("stage") or "").strip().lower() in ETAPAS_CERRADAS:
+        return True
+    try:
+        return int(lead.get("bounced") or 0) == 1
+    except (TypeError, ValueError):
+        return False
 
 
 def get_daily_limit(cfg: dict[str, str]) -> int:
@@ -245,6 +280,7 @@ def dispatch_due_jobs(*, respect_pacing: bool = False, respect_window: bool = Fa
 
         sent_count = 0
         skipped_no_creds = skipped_daily_cap = skipped_pacing = skipped_window = failed_count = 0
+        cancelled_closed_lead = 0
 
         try:
             min_gap_sec = max(30, int(settings.get("autopilot_min_gap_seconds", "180")))
@@ -255,6 +291,16 @@ def dispatch_due_jobs(*, respect_pacing: bool = False, respect_window: bool = Fa
         last_sent_dt = database.get_last_sent_email_datetime() if respect_pacing else None
 
         for job in pending:
+            # Doble seguro: aunque el correo ya esté en la cola, si el lead pidió la baja,
+            # dijo que no o rebotó, NO sale. Se cancela el job y se sigue.
+            lead_del_job = database.get_lead_by_email(job["recipient"])
+            if _lead_esta_cerrado(lead_del_job):
+                database.update_outbox_job(
+                    job["id"], "cancelled",
+                    f"lead en '{lead_del_job.get('stage')}' / bounced={lead_del_job.get('bounced')}",
+                )
+                cancelled_closed_lead += 1
+                continue
             if not status["smtp_ready"]:
                 skipped_no_creds += 1
                 continue
@@ -286,6 +332,7 @@ def dispatch_due_jobs(*, respect_pacing: bool = False, respect_window: bool = Fa
             "config_status": status, "sent": sent_count,
             "skipped_missing_credentials": skipped_no_creds, "skipped_daily_cap": skipped_daily_cap,
             "skipped_pacing": skipped_pacing, "skipped_window": skipped_window, "failed": failed_count,
+            "cancelled_closed_lead": cancelled_closed_lead,
         }
 
 
@@ -412,6 +459,13 @@ def classify_reply_intent(subject: str, body: str, headers: dict[str, str] | Non
     if any(kw in combined for kw in auto_reply_kw):
         return "respuesta_automatica"
 
+    # La baja la decide la misma función que usa el agente, para que motor y agente
+    # no discrepen. Va después del autorespondedor: un pie de página automático con
+    # "unsubscribe" no es un lead pidiendo la baja.
+    agente = _load_sales_agent()
+    if agente is not None and agente.pide_la_baja(clean_body):
+        return "baja"
+
     negative_kw = ("no gracias", "no estamos interesados", "no nos interesa", "no interesa",
                     "unsubscribe", "no me escriban")
     if any(kw in clean_body for kw in negative_kw):
@@ -427,7 +481,7 @@ def classify_reply_intent(subject: str, body: str, headers: dict[str, str] | Non
     return "respuesta_recibida"
 
 
-def sync_imap_replies(max_messages: int = 40) -> dict[str, object]:
+def sync_imap_replies(max_messages: int = 40, *, dry_run: bool = False) -> dict[str, object]:
     with _DISPATCH_LOCK:
         database.init_db()
         cfg = load_env_file()
@@ -436,8 +490,9 @@ def sync_imap_replies(max_messages: int = 40) -> dict[str, object]:
         if not (user and password and imap_host):
             return {"imap_ready": False, "checked": 0, "matched": 0, "interested": []}
 
-        matched, checked = 0, 0
+        matched, checked, agent_runs = 0, 0, 0
         interested: list[dict[str, str]] = []
+        agent_ready = _tiene_anthropic_key(cfg)
         try:
             with imaplib.IMAP4_SSL(imap_host, 993, timeout=15) as imap:
                 imap.login(user, password)
@@ -477,7 +532,10 @@ def sync_imap_replies(max_messages: int = 40) -> dict[str, object]:
                     merged_notes = f"{new_note}\n{prev_notes}".strip() if prev_notes else new_note
 
                     updated_lead = database.update_lead_stage(lead["id"], intent, notes=merged_notes)
+                    # Si contestó, no se le persigue más con lo que ya estaba en cola:
+                    # ni correos pendientes ni seguimientos del agente.
                     database.cancel_pending_outbox_for_recipient(sender_email)
+                    database.cancel_followups_for_lead(lead["id"])
 
                     if intent == "interesado_cita" and updated_lead:
                         interested.append({
@@ -494,10 +552,99 @@ def sync_imap_replies(max_messages: int = 40) -> dict[str, object]:
                             f"Email: {sender_email}\nRespondió: \"{snippet[:300]}\"",
                             tomorrow_9am,
                         )
-        except Exception as exc:
-            return {"imap_ready": True, "error": str(exc), "checked": checked, "matched": matched, "interested": interested}
 
-        return {"imap_ready": True, "checked": checked, "matched": matched, "interested": interested}
+                    # El agente contesta solo si vale la pena. Va en try/except a propósito:
+                    # si el agente falla, el sync, las alertas del Mac y el Calendar siguen.
+                    if intent in INTENTS_PARA_EL_AGENTE and agent_ready:
+                        agente = _load_sales_agent()
+                        if agente is not None:
+                            try:
+                                agente.AgenteVentas(cfg, dry_run=dry_run).correr(
+                                    lead_email=sender_email, mensaje_lead=snippet,
+                                    nicho=lead.get("nicho") or "",
+                                )
+                                agent_runs += 1
+                            except Exception:
+                                pass
+        except Exception as exc:
+            return {"imap_ready": True, "error": str(exc), "checked": checked, "matched": matched,
+                    "interested": interested, "agent_runs": agent_runs}
+
+        return {"imap_ready": True, "checked": checked, "matched": matched,
+                "interested": interested, "agent_runs": agent_runs}
+
+
+def run_sales_agent_cycle(*, dry_run: bool = False, max_leads: int = 5) -> dict[str, object]:
+    """Ciclo del agente de ventas (Paso 5). Primero los seguimientos vencidos, después los
+    leads nuevos en frío. Sin API key sale limpio; en `dry_run` no escribe nada.
+    """
+    agente = _load_sales_agent()
+    if agente is None:
+        return {"ran": False, "reason": "sales_agent_no_disponible"}
+
+    cfg = agente.cargar_config()
+    if not _tiene_anthropic_key(cfg) and not dry_run:
+        return {"ran": False, "reason": "sin_api_key"}
+
+    # En seco nunca se crea la BD: si no existe, no hay nada que mirar.
+    if dry_run and not database.DB_PATH.exists():
+        return {"ran": False, "reason": "dry_run_sin_bd", "dry_run": True}
+
+    database.init_db()
+    if not dry_run and not _is_within_sending_window(database.get_settings()):
+        return {"ran": False, "reason": "outside_window"}
+
+    conf = agente.leer_configuracion(cfg)
+    resumen: dict[str, object] = {
+        "ran": True, "dry_run": dry_run, "followups_corridos": 0, "followups_cancelados": 0,
+        "leads_en_frio": 0, "cortado_por": "", "errores": [],
+    }
+
+    def _tope_lleno() -> str:
+        if database.agent_emails_queued_today() >= conf["max_emails"]:
+            return "tope_correos"
+        if database.agent_cost_today_usd() >= conf["max_usd"]:
+            return "tope_usd"
+        return ""
+
+    def _correr(lead: dict, mensaje: str = "") -> bool:
+        try:
+            agente.AgenteVentas(cfg, dry_run=dry_run).correr(
+                lead_email=lead["email"], mensaje_lead=mensaje, nicho=lead.get("nicho") or "",
+            )
+            return True
+        except Exception as exc:
+            resumen["errores"].append(str(exc)[:200])
+            return False
+
+    # 1) seguimientos vencidos. Un lead cerrado se cancela SIN gastar un token.
+    for seg in database.list_due_followups(limit=max(1, max_leads)):
+        lead = database.get_lead_by_id(seg.get("lead_id"))
+        if not lead or _lead_esta_cerrado(lead):
+            if not dry_run:
+                database.update_followup(seg["id"], "cancelado")
+            resumen["followups_cancelados"] = int(resumen["followups_cancelados"]) + 1
+            continue
+        corte = _tope_lleno()
+        if corte:
+            resumen["cortado_por"] = corte
+            break
+        if _correr(lead):
+            resumen["followups_corridos"] = int(resumen["followups_corridos"]) + 1
+            if not dry_run:
+                database.update_followup(seg["id"], "hecho")
+
+    # 2) leads nuevos en frío, hasta max_leads y cortando en seco ante cualquier tope.
+    if not resumen["cortado_por"]:
+        for lead in database.list_cold_leads_for_agent(limit=max_leads):
+            corte = _tope_lleno()
+            if corte:
+                resumen["cortado_por"] = corte
+                break
+            if _correr(lead):
+                resumen["leads_en_frio"] = int(resumen["leads_en_frio"]) + 1
+
+    return resumen
 
 
 def sync_landing_messages(max_messages: int = 40) -> dict[str, object]:
@@ -559,14 +706,23 @@ def main() -> None:
     parser.add_argument("--sync-replies", action="store_true")
     parser.add_argument("--sync-landing", action="store_true")
     parser.add_argument("--replenish", action="store_true")
+    parser.add_argument("--run-agent", action="store_true",
+                        help="Corre el ciclo del agente de ventas (seguimientos + leads en frío).")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Valida sin escribir en la BD, sin API y sin enviar correos.")
     args = parser.parse_args()
 
-    database.init_db()
+    # Con --run-agent --dry-run no se crea la BD: el objetivo es no tocar nada.
+    if not (args.run_agent and args.dry_run):
+        database.init_db()
+    if args.run_agent:
+        print(json.dumps(run_sales_agent_cycle(dry_run=args.dry_run), ensure_ascii=False, indent=2))
+        return
     if args.status_only:
         print(json.dumps({"config_status": get_autopilot_status(), "pending_jobs": len(database.list_outbox_jobs(status="pending"))}, ensure_ascii=False, indent=2))
         return
     if args.sync_replies:
-        replies_res = sync_imap_replies()
+        replies_res = sync_imap_replies(dry_run=args.dry_run)
         replies_res["landing"] = sync_landing_messages()
         print(json.dumps(replies_res, ensure_ascii=False, indent=2))
         return
@@ -580,6 +736,12 @@ def main() -> None:
     replenish_res = ensure_daily_pipeline()
     dispatch_res = dispatch_due_jobs()
     dispatch_res["replenish"] = replenish_res
+    # El agente solo entra si hay API key. Si falta, el motor de siempre no se entera.
+    if _tiene_anthropic_key():
+        try:
+            dispatch_res["sales_agent"] = run_sales_agent_cycle(dry_run=args.dry_run)
+        except Exception as exc:
+            dispatch_res["sales_agent"] = {"ran": False, "error": str(exc)[:200]}
     print(json.dumps(dispatch_res, ensure_ascii=False, indent=2))
 
 
