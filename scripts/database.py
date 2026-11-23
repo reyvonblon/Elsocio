@@ -39,6 +39,20 @@ CREATE TABLE IF NOT EXISTS landing_messages (
     message_id TEXT UNIQUE, mensaje TEXT, estado TEXT DEFAULT 'nuevo',
     received_at TEXT
 );
+CREATE TABLE IF NOT EXISTS agent_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fecha TEXT, lead_id INTEGER, turno INTEGER, modelo TEXT,
+    herramienta TEXT, argumentos TEXT, resultado TEXT,
+    tokens_entrada INTEGER DEFAULT 0, tokens_salida INTEGER DEFAULT 0,
+    bloqueado_por_guarda TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_agent_log_fecha ON agent_log(fecha);
+CREATE TABLE IF NOT EXISTS agent_followups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id INTEGER, programado_para TEXT, motivo TEXT,
+    estado TEXT DEFAULT 'pendiente', created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_followups_estado ON agent_followups(estado, programado_para);
 """
 
 
@@ -277,3 +291,103 @@ def import_uncontacted_prospects_from_csv(csv_path: Path, max_new: int) -> dict:
             known.add(email)
             imported += 1
     return {"imported": imported}
+
+
+# ---------------------------------------------------------------- agente de ventas
+
+def log_agent_action(
+    *, lead_id: int | None, turno: int, modelo: str, herramienta: str,
+    argumentos: str = "", resultado: str = "", tokens_entrada: int = 0,
+    tokens_salida: int = 0, bloqueado_por_guarda: str = "",
+) -> int:
+    """Una fila por cada cosa que hace el agente. Nunca guardar secretos aquí."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO agent_log (fecha, lead_id, turno, modelo, herramienta, argumentos, "
+            "resultado, tokens_entrada, tokens_salida, bloqueado_por_guarda) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (_now(), lead_id, turno, modelo, herramienta, argumentos[:2000], resultado[:2000],
+             tokens_entrada, tokens_salida, bloqueado_por_guarda),
+        )
+        return int(cur.lastrowid)
+
+
+def agent_tokens_today() -> dict[str, int]:
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(tokens_entrada),0) AS ent, COALESCE(SUM(tokens_salida),0) AS sal "
+            "FROM agent_log WHERE fecha LIKE ?",
+            (f"{today}%",),
+        ).fetchone()
+        return {"entrada": int(row["ent"]), "salida": int(row["sal"])}
+
+
+def agent_emails_queued_today() -> int:
+    """Correos que el agente encoló hoy (para el tope diario, se cuenta al encolar, no al enviar)."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM agent_log WHERE herramienta='enviar_correo' "
+            "AND bloqueado_por_guarda='' AND fecha LIKE ?",
+            (f"{today}%",),
+        ).fetchone()
+        return int(row["n"])
+
+
+def already_emailed_today(recipient: str) -> bool:
+    """Evita duplicados: ¿ya hay un correo a esta dirección encolado o enviado hoy?"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM outbox WHERE recipient=? AND status IN ('pending','sent') "
+            "AND created_at LIKE ? LIMIT 1",
+            (recipient.lower().strip(), f"{today}%"),
+        ).fetchone()
+        return row is not None
+
+
+def schedule_followup(lead_id: int, dias: int, motivo: str) -> int | None:
+    """Programa un seguimiento. Máximo 2 por lead — devuelve None si ya llegó al tope."""
+    if count_followups_for_lead(lead_id) >= 2:
+        return None
+    cuando = (datetime.now() + timedelta(days=max(1, dias))).strftime("%Y-%m-%d %H:%M:%S")
+    with _conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO agent_followups (lead_id, programado_para, motivo, estado, created_at) "
+            "VALUES (?,?,?,'pendiente',?)",
+            (lead_id, cuando, motivo, _now()),
+        )
+        return int(cur.lastrowid)
+
+
+def count_followups_for_lead(lead_id: int) -> int:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM agent_followups WHERE lead_id=? AND estado!='cancelado'",
+            (lead_id,),
+        ).fetchone()
+        return int(row["n"])
+
+
+def list_due_followups(limit: int = 10) -> list[dict]:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM agent_followups WHERE estado='pendiente' AND programado_para <= ? "
+            "ORDER BY programado_para ASC LIMIT ?",
+            (_now(), limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_followup(followup_id: int, estado: str) -> None:
+    with _conn() as conn:
+        conn.execute("UPDATE agent_followups SET estado=? WHERE id=?", (estado, followup_id))
+
+
+def cancel_followups_for_lead(lead_id: int) -> None:
+    """Si el lead responde o pide la baja, no se le persigue más."""
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE agent_followups SET estado='cancelado' WHERE lead_id=? AND estado='pendiente'",
+            (lead_id,),
+        )

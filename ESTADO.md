@@ -10,7 +10,7 @@
 - Alcance del agente fijado: cliente calificado + aviso al dueño. Precio y link de pago solo los pone el dueño (`MODO_TRABAJO.md` manda sobre `identidad.md`).
 - `RESULTADOS_MERCADO.md` con columnas Canal y Cantidad. Primer dato real: restaurantes por correo y WhatsApp de negocio = silencio total.
 ## En prueba
-- `sales_agent.py` (agente de ventas con tool use, solo stdlib, Sonnet 5 por `.env`, tope 5 correos/día): paso 1 de 6 hecho (contexto). Faltan tablas, núcleo, dry-run, enganche y escritura en RESULTADOS_MERCADO.
+- `sales_agent.py` (agente de ventas con tool use, solo stdlib, Sonnet 5 por `.env`, tope 5 correos/día): pasos 1-2 de 6 hechos (contexto + tablas `agent_log`/`agent_followups` probadas sin perder datos). Faltan núcleo, dry-run, enganche y escritura en RESULTADOS_MERCADO.
 - Faltan en `.env`: contraseña de aplicación de Gmail (sin ella nadie recoge los mensajes de la landing) y `ANTHROPIC_API_KEY` (sin ella el agente solo corre en dry-run; saldo previsto 3 USD).
 ## Descartado
 - `remotion render` directo: exige macOS 15. Funciona vía frames PNG + ffmpeg, pero el video está en pausa hasta validar que las fotos conviertan.
