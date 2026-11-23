@@ -1,21 +1,20 @@
 # ESTADO
-
 ## Base aprobada
-- Motor de prospección (prospect_hunter.py) + envío/respuestas (autopilot_dispatcher.py) + SQLite, adaptado del motor probado de Tu Parche En Vivo.
-- 2 nichos de arranque: modelado-3d-espacios, fichas-tecnicas-ropa. Sistema abierto a cualquier nicho nuevo (`nuevo-nicho.md`).
+- Motor: `prospect_hunter.py` (descubre + verifica MX) + `autopilot_dispatcher.py` (SMTP/IMAP, límite, horario, pausas) + SQLite en `data/el_socio.db`.
+- 2 nichos de arranque: modelado-3d-espacios, fichas-tecnicas-ropa. Abierto a nichos nuevos (`nuevo-nicho.md`).
 - 5 skills de calidad (humanizer, pensamiento-critico, psicologia-y-estatus, inteligencia-competitiva, editor-implacable).
-- Creación real de eventos en Calendar.app vía AppleScript cuando un lead responde interesado (probado, funciona).
-- Landing `docs/index.html`: solo logo + caja de texto ("Escribe lo que necesitas..."). Al enviar: abre WhatsApp con el mensaje Y manda copia silenciosa por Web3Forms a elsociotuia@gmail.com. Repo: github.com/reyvonblon/Elsocio.git.
-- Backend de la landing: `sync_landing_messages()` en `autopilot_dispatcher.py` lee esos correos por IMAP, los guarda en tabla `landing_messages` (SQLite), notifica en el Mac y crea evento en Calendar. Manejado 100% por El Socio, sin dashboards ni pasos manuales de Raymond.
-- Gmail dedicado: elsociotuia@gmail.com.
-
+- Evento real en Calendar.app vía AppleScript cuando un lead responde interesado (probado).
+- Landing `docs/index.html` (logo + caja de texto → WhatsApp + copia por Web3Forms) y su backend `sync_landing_messages()` → tabla `landing_messages` → notifica Mac + Calendar. Repo: github.com/reyvonblon/Elsocio.git, Pages en https://reyvonblon.github.io/Elsocio/
+- Gmail dedicado elsociotuia@gmail.com. Canal IG (`redes/`): frases + fotos vía `generar_post.sh`; publicar sigue manual.
+- launchd corriendo: `com.elsocio.landing` (cada 10 min) y `com.elsocio.panelserver` (puerto 8787).
+- Alcance del agente fijado: cliente calificado + aviso al dueño. Precio y link de pago solo los pone el dueño (`MODO_TRABAJO.md` manda sobre `identidad.md`).
+- `RESULTADOS_MERCADO.md` con columnas Canal y Cantidad. Primer dato real: restaurantes por correo y WhatsApp de negocio = silencio total.
 ## En prueba
-- Falta contraseña de aplicación de Gmail en `.env` — SIN esto, `sync_landing_messages` no puede leer los mensajes de la landing (el correo llega pero nadie lo recoge).
-- GitHub Pages activado (main → /docs): https://reyvonblon.github.io/Elsocio/
-- Tarea diaria programada con launchd: `com.elsocio.landing` (revisa correo cada 10 min, notifica Mac + Calendar) y `com.elsocio.panelserver` (sirve el panel en la red local, puerto 8787) — ambas corriendo.
-
+- `sales_agent.py` (agente de ventas con tool use, solo stdlib, Sonnet 5 por `.env`, tope 5 correos/día): paso 1 de 6 hecho (contexto). Faltan tablas, núcleo, dry-run, enganche y escritura en RESULTADOS_MERCADO.
+- Faltan en `.env`: contraseña de aplicación de Gmail (sin ella nadie recoge los mensajes de la landing) y `ANTHROPIC_API_KEY` (sin ella el agente solo corre en dry-run; saldo previsto 3 USD).
 ## Descartado
-- Tailscale para ver el panel desde el celular fuera de casa: la versión actual ya no soporta macOS Monterey (error confirmado en log de instalación: kLSIncompatibleSystemVersionErr). Se queda con acceso solo por WiFi de casa (http://192.168.1.44:8787/mensajes.html) hasta encontrar alternativa compatible.
-- Calendly / login externo para agendar: Raymond solo quiere el Calendario local de Mac.
+- `remotion render` directo: exige macOS 15. Funciona vía frames PNG + ffmpeg, pero el video está en pausa hasta validar que las fotos conviertan.
+- Tailscale para el panel fuera de casa: no soporta Monterey. Solo WiFi de casa (http://192.168.1.44:8787/mensajes.html).
+- Calendly o cualquier login externo para agendar: Raymond solo quiere el Calendario local del Mac.
 - Clonar skills de repos externos de GitHub: alto riesgo de inventar contenido — se reescribieron a mano.
-- "Cargar todas las skills sin límite" en CLAUDE.md: degrada calidad — se limitó a 3-4 relevantes por tarea.
+- "Cargar todas las skills sin límite": degrada calidad — limitado a 3-4 relevantes por tarea.
