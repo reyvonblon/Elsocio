@@ -6,7 +6,11 @@ nunca manda links de pago, nunca envía por SMTP (solo encola en `outbox`).
 
 Uso:
     python3 scripts/sales_agent.py --lead-email alguien@dominio.com --dry-run
+    python3 scripts/sales_agent.py --lead-email alguien@dominio.com --dry-run --con-api
     python3 scripts/sales_agent.py --lead-email alguien@dominio.com --mensaje "¿cuánto cuesta un logo?"
+
+`--dry-run` solo valida: no escribe en la BD, no encola y NO llama a la API (no gasta saldo).
+Para probar contra la API real en seco hay que pedirlo con `--con-api`, y aun así respeta los topes.
 """
 
 from __future__ import annotations
@@ -16,8 +20,10 @@ import json
 import os
 import re
 import sys
+import time
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -37,6 +43,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 
 MAX_TURNS = 6          # cortado en Python, no se confía en el modelo
 MAX_REINTENTOS = 2     # solo para 429 / 5xx
+PAUSA_REINTENTO = 1.5  # segundos * (intento + 1) antes de reintentar un 429/5xx
 MAX_TOKENS_RESPUESTA = 2048
 TIMEOUT_HTTP = 120
 
@@ -49,6 +56,8 @@ PRECIOS_USD_MTOK = {
 PRECIO_FALLBACK = PRECIOS_USD_MTOK["claude-sonnet-5"]
 
 WEB_OFICIAL = "reyvonblon.github.io"
+# Hostnames que sí pueden salir en un correo. Se comparan EXACTOS, nunca "está contenido en".
+DOMINIOS_PERMITIDOS = (WEB_OFICIAL, "wa.me", "api.whatsapp.com")
 
 
 # ------------------------------------------------------------------ configuración
@@ -132,6 +141,9 @@ PATRONES_GUARDA: list[tuple[str, str]] = [
     ("cifra_con_escala", rf"(?:\d[\d.,]*|{_NUMERAL_LETRAS})\s*(?:mil|millon|millones)\b"),
     ("cifra_separada", r"\b\d{1,3}[.,]\d{3}\b"),
     ("cifra_abreviada", r"\b\d+\s*(?:k|m|mm)\b"),
+    # Entero pegado sin separador: 25000, 50000, 120000. En el cuerpo nunca van teléfonos
+    # ni precios: la firma la agrega el dispatcher después, no el modelo.
+    ("cifra_entera_grande", r"\b[1-9]\d{4,}\b"),
     # métodos y pasarelas de pago
     ("metodo_pago", r"\b(nequi|daviplata|wompi|mercado\s?pago|mercadopago|payu|payu\s?latam|stripe|"
                     r"paypal|pse|bancolombia|bancolombia\s?a\s?la\s?mano|davivienda|epayco|addi|bold|"
@@ -139,17 +151,75 @@ PATRONES_GUARDA: list[tuple[str, str]] = [
                     r"link\s?de\s?pago|pasarela)\b"),
 ]
 
-_RE_URL = re.compile(r"(?:https?://|www\.)[^\s<>\"')]+", re.IGNORECASE)
+# Acortadores y pasarelas de cobro: se bloquean incluso sin ruta.
+HOSTS_BLOQUEADOS = (
+    "bit.ly", "tinyurl.com", "t.co", "goo.gl", "cutt.ly", "rb.gy", "is.gd", "shorturl.at",
+    "acortar.link", "n9.cl", "wa.link", "mpago.la", "mpago.li", "mercadopago.com",
+    "mercadopago.com.co", "paypal.me", "paypal.com", "stripe.com", "wompi.co", "payu.com",
+    "payulatam.com", "epayco.co", "bold.co", "addi.com", "nequi.com.co", "daviplata.com",
+    "pse.com.co", "venmo.com", "cash.app", "ko-fi.com",
+)
+# Primera etiqueta del host que delata una página de cobro: checkout.*, pagos.*, pay.*
+SUBDOMINIOS_DE_COBRO = ("checkout", "pago", "pagos", "pagar", "pay", "payment", "payments",
+                        "cobro", "cobros", "donar", "donate", "billing")
+
+# Un solo patrón para links con y sin esquema: "https://x.com/y", "www.x.com", "mpago.la/2xYz".
+_RE_ENLACE = re.compile(
+    r"(?:(?:https?:)?//)?"                              # esquema opcional
+    r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}"   # dominio.tld
+    r"(?::\d{2,5})?"                                    # puerto
+    r"(?:/[^\s<>\"')]*)?",                              # ruta opcional
+    re.IGNORECASE,
+)
+
+
+def _hostname(bruto: str) -> str:
+    """Hostname exacto del enlace, parseado de verdad. Se le pone '//' para que urlparse lo vea."""
+    con_esquema = bruto if "//" in bruto[:10] else "//" + bruto
+    try:
+        host = urllib.parse.urlparse(con_esquema).hostname or ""
+    except ValueError:
+        return ""
+    return host.lower().rstrip(".")
+
+
+def _host_permitido(host: str) -> bool:
+    """Igualdad exacta (con 'www.' opcional). Nada de 'contiene': así
+    'reyvonblon.github.io.evil.com' y 'pagos.evil.com/?r=reyvonblon.github.io' NO pasan.
+    """
+    if host.startswith("www."):
+        host = host[4:]
+    return host in DOMINIOS_PERMITIDOS
 
 
 def _links_externos(texto: str) -> list[str]:
-    permitidos = (WEB_OFICIAL, "wa.me", "api.whatsapp.com")
+    """Enlaces que no pueden salir del correo."""
     fuera = []
-    for url in _RE_URL.findall(texto):
-        bajo = url.lower()
-        if not any(d in bajo for d in permitidos):
-            fuera.append(url)
+    for hallado in _RE_ENLACE.finditer(texto):
+        bruto = hallado.group(0).rstrip(".,;:!?)")
+        host = _hostname(bruto)
+        if not host or "." not in host:
+            continue
+        if _host_permitido(host):
+            continue
+        bajo = bruto.lower()
+        tiene_esquema = "//" in bajo[:10]
+        tiene_ruta = "/" in bajo.split("//", 1)[-1]
+        etiqueta = host.split(".")[0]
+        sospechoso = (host in HOSTS_BLOQUEADOS
+                      or any(host.endswith("." + h) for h in HOSTS_BLOQUEADOS)
+                      or etiqueta in SUBDOMINIOS_DE_COBRO)
+        if tiene_esquema or tiene_ruta or sospechoso or bajo.startswith("www."):
+            fuera.append(bruto)
     return fuera
+
+
+def _sin_links_permitidos(texto: str) -> str:
+    """Saca los links propios antes de contar cifras: wa.me/573001112233 no es un precio."""
+    def _reemplazo(hallado):
+        bruto = hallado.group(0).rstrip(".,;:!?)")
+        return " enlace_oficial " if _host_permitido(_hostname(bruto)) else hallado.group(0)
+    return _RE_ENLACE.sub(_reemplazo, texto)
 
 
 def revisar_guarda_precios(*partes: str) -> list[str]:
@@ -159,8 +229,10 @@ def revisar_guarda_precios(*partes: str) -> list[str]:
     """
     texto = _plano(" \n ".join(p or "" for p in partes))
     motivos = []
+    # Las cifras se buscan sin los links propios; los links, sobre el texto completo.
+    texto_cifras = _sin_links_permitidos(texto)
     for nombre, patron in PATRONES_GUARDA:
-        hallado = re.search(patron, texto)
+        hallado = re.search(patron, texto_cifras)
         if hallado:
             motivos.append(f"{nombre}: '{hallado.group(0).strip()}'")
     for url in _links_externos(texto):
@@ -186,6 +258,28 @@ def tiene_linea_de_baja(cuerpo: str) -> bool:
 
 def asegurar_linea_de_baja(cuerpo: str) -> str:
     return cuerpo if tiene_linea_de_baja(cuerpo) else cuerpo.rstrip() + LINEA_BAJA
+
+
+# Lo que escribe un lead cuando quiere que lo dejen en paz. Se actúa en CÓDIGO:
+# no se depende de que el modelo llame cambiar_etapa.
+_SENALES_PIDE_BAJA = (
+    "no me escriban", "no me escribas", "no me escriba", "no me vuelvan a escribir",
+    "no me vuelvas a escribir", "no vuelvan a escribirme", "no me contacten",
+    "darme de baja", "dame de baja", "deme de baja", "darnos de baja", "quiero la baja",
+    "no quiero recibir", "no deseo recibir", "no me interesa recibir", "quitenme de",
+    "borren mi correo", "borra mi correo", "remover mi correo", "eliminar mi correo",
+    "dejen de escribirme", "deja de escribirme", "dejenme en paz", "es spam", "esto es spam",
+    "desuscribir", "desuscribeme", "unsubscribe", "remove me",
+)
+_RE_PALABRA_BAJA = re.compile(r"\b(?:baja|bajar?me|unsubscribe|stop)\b")
+
+
+def pide_la_baja(mensaje: str) -> bool:
+    """True si el lead pidió que no se le vuelva a escribir."""
+    plano = _plano(mensaje or "")
+    if any(s in plano for s in _SENALES_PIDE_BAJA):
+        return True
+    return bool(_RE_PALABRA_BAJA.search(plano))
 
 
 # ------------------------------------------------------------------ definición de herramientas
@@ -342,19 +436,28 @@ def llamar_api(api_key: str, cuerpo: dict) -> dict:
             transitorio = err.code == 429 or 500 <= err.code < 600
             if not transitorio or intento == MAX_REINTENTOS:
                 raise ErrorAPI(ultimo) from None
+            # Pausa antes de reintentar: un 429 sin espera solo gasta el cupo más rápido.
+            time.sleep(PAUSA_REINTENTO * (intento + 1))
         except urllib.error.URLError as err:
             ultimo = f"red: {err.reason}"
             if intento == MAX_REINTENTOS:
                 raise ErrorAPI(ultimo) from None
+            time.sleep(PAUSA_REINTENTO * (intento + 1))
     raise ErrorAPI(ultimo or "sin respuesta")
 
 
 # ------------------------------------------------------------------ el agente
 
+ETAPAS_CERRADAS = ("baja", "no_interesado")
+
+
 class AgenteVentas:
-    def __init__(self, cfg: dict[str, str], *, dry_run: bool = False):
+    def __init__(self, cfg: dict[str, str], *, dry_run: bool = False, con_api: bool = False):
         self.cfg = cfg
         self.dry_run = dry_run
+        self.con_api = con_api and dry_run
+        # Modo simulado = el dry-run por defecto: NI UN TOKEN de la API, ni una escritura en BD.
+        self.simulado = dry_run and not self.con_api
         self.conf = leer_configuracion(cfg)
         self.modelo = self.conf["modelo"]
         self.turno = 0
@@ -386,22 +489,41 @@ class AgenteVentas:
 
     # --- guardas previas ------------------------------------------------
 
+    def _gasto_hoy_usd(self) -> float:
+        """Gasto del día. En dry-run --con-api el log no se escribe, así que se suma a mano."""
+        return database.agent_cost_today_usd() + (self.costo_corrida if self.dry_run else 0.0)
+
     def guardas_previas(self) -> str:
         """Lo que se revisa ANTES de gastar un solo token. Devuelve '' si se puede operar."""
+        if self.simulado:
+            # Nada que gastar y nada que escribir: no se exige API key ni se abre la BD.
+            return ""
         if not self.conf["tiene_api_key"]:
             return "Falta ANTHROPIC_API_KEY en .env — el agente no llama a la API."
-        if self.dry_run:
-            return ""
         encolados = database.agent_emails_queued_today()
         if encolados >= self.conf["max_emails"]:
             return f"Tope diario de correos alcanzado ({encolados}/{self.conf['max_emails']})."
-        gastado = database.agent_cost_today_usd()
+        gastado = self._gasto_hoy_usd()
         if gastado >= self.conf["max_usd"]:
             return f"Tope diario de gasto alcanzado ({gastado:.4f}/{self.conf['max_usd']:.2f} USD)."
         return ""
 
+    def motivo_lead_cerrado(self) -> str:
+        """Un lead de baja, no interesado o rebotado no se toca: ni API, ni correo."""
+        lead = self.lead or {}
+        etapa = str(lead.get("stage") or "").strip().lower()
+        if etapa in ETAPAS_CERRADAS:
+            return f"Lead en etapa '{etapa}': no se le escribe ni se llama a la API."
+        try:
+            rebotado = int(lead.get("bounced") or 0)
+        except (TypeError, ValueError):
+            rebotado = 0
+        if rebotado == 1:
+            return "El correo de este lead rebotó (bounced=1): no se le escribe."
+        return ""
+
     def _cupo_correos_libre(self) -> tuple[bool, str]:
-        if self.dry_run:
+        if self.simulado:
             return True, ""
         encolados = database.agent_emails_queued_today()
         if encolados >= self.conf["max_emails"]:
@@ -412,6 +534,14 @@ class AgenteVentas:
     # --- herramientas ---------------------------------------------------
 
     def _tool_enviar_correo(self, args: dict, *, es_frio: bool) -> tuple[bool, str]:
+        cerrado = self.motivo_lead_cerrado()
+        if cerrado:
+            self._log("enviar_correo", argumentos=json.dumps({"asunto": args.get("asunto", "")},
+                                                             ensure_ascii=False),
+                      resultado="rechazado: lead cerrado", bloqueado=cerrado)
+            self.acciones.append(f"correo RECHAZADO: {cerrado}")
+            return False, cerrado + " No insistas: este lead está cerrado."
+
         asunto = (args.get("asunto") or "").strip()
         cuerpo = (args.get("cuerpo") or "").strip()
         if not asunto or not cuerpo:
@@ -434,7 +564,7 @@ class AgenteVentas:
         if es_frio:
             cuerpo = asegurar_linea_de_baja(cuerpo)
 
-        if not self.dry_run and database.already_emailed_today(destinatario):
+        if not self.simulado and database.already_emailed_today(destinatario):
             return False, "Ya hay un correo encolado o enviado hoy a esta dirección. No dupliques."
 
         libre, aviso = self._cupo_correos_libre()
@@ -533,6 +663,37 @@ class AgenteVentas:
         return True, ("Listo: Raymond tiene el encargo y el evento para cotizar. Dile al cliente que "
                       "estás preparando la propuesta. No adelantes ninguna cifra.")
 
+    # --- lead -----------------------------------------------------------
+
+    def _cargar_lead(self, lead_email: str, nicho: str) -> dict:
+        """En dry-run nunca crea el lead; si no existe, se arma en memoria."""
+        existente = None
+        if not self.simulado or database.DB_PATH.exists():
+            existente = database.get_lead_by_email(lead_email)
+        if existente:
+            return existente
+        if self.dry_run:
+            return {"id": None, "email": lead_email.lower().strip(), "company": "",
+                    "nicho": nicho, "stage": "nuevo_lead", "notes": "", "bounced": 0}
+        lead_id = database.upsert_lead(
+            name="", company="", email=lead_email, nicho=nicho,
+            source="sales_agent", stage="nuevo_lead", notes="Creado por sales_agent",
+        )
+        return database.get_lead_by_email(lead_email) or {
+            "id": lead_id, "email": lead_email.lower().strip(), "stage": "nuevo_lead", "bounced": 0}
+
+    def _dar_de_baja(self, porque: str) -> None:
+        """Baja aplicada por el código: etapa + cancelación de todo lo pendiente."""
+        self.acciones.append(f"BAJA automática ({porque}): cancelado todo lo pendiente")
+        if self.dry_run or not self.lead or not self.lead.get("id"):
+            return
+        nota = f"{(self.lead.get('notes') or '')} | BAJA ({porque})".strip(" |")
+        database.update_lead_stage(self.lead["id"], "baja", notes=nota[:2000])
+        database.cancel_pending_outbox_for_recipient(self.lead.get("email", ""))
+        database.cancel_followups_for_lead(self.lead["id"])
+        self.lead["stage"] = "baja"
+        self._log("baja_automatica", resultado=f"etapa baja + pendientes cancelados ({porque})")
+
     def ejecutar_herramienta(self, nombre: str, args: dict, *, es_frio: bool) -> tuple[bool, str]:
         nombre = ALIAS_HERRAMIENTAS.get(nombre, nombre)
         try:
@@ -557,17 +718,21 @@ class AgenteVentas:
         if bloqueo:
             return {"ok": False, "motivo": bloqueo, "acciones": [], "costo_usd": 0.0, "turnos": 0}
 
-        self.lead = database.get_lead_by_email(lead_email)
-        if not self.lead:
-            if self.dry_run:
-                self.lead = {"id": None, "email": lead_email.lower().strip(), "company": "",
-                             "nicho": nicho, "stage": "nuevo_lead", "notes": ""}
-            else:
-                lead_id = database.upsert_lead(
-                    name="", company="", email=lead_email, nicho=nicho,
-                    source="sales_agent", stage="nuevo_lead", notes="Creado por sales_agent",
-                )
-                self.lead = database.get_lead_by_email(lead_email) or {"id": lead_id, "email": lead_email}
+        self.lead = self._cargar_lead(lead_email, nicho)
+
+        # Antes de la API: un lead cerrado o rebotado se corta aquí mismo.
+        cerrado = self.motivo_lead_cerrado()
+        if cerrado:
+            self._log("rechazo_lead_cerrado", resultado=cerrado)
+            self.acciones.append(cerrado)
+            return {"ok": False, "motivo": cerrado, "acciones": self.acciones,
+                    "costo_usd": 0.0, "turnos": 0}
+
+        # Si pidió la baja, se le da de baja en código y no se gasta ni un token.
+        if mensaje_lead.strip() and pide_la_baja(mensaje_lead):
+            self._dar_de_baja("lo pidió en su mensaje")
+            return {"ok": True, "motivo": "baja_pedida_por_el_lead", "acciones": self.acciones,
+                    "costo_usd": 0.0, "turnos": 0}
 
         es_frio = not mensaje_lead.strip()
         system_prompt = construir_system_prompt()
@@ -583,6 +748,23 @@ class AgenteVentas:
                               "con un ángulo concreto para su negocio y programa el seguimiento.")
         else:
             contexto_lead += f"Mensaje del lead:\n\"\"\"\n{mensaje_lead.strip()[:3000]}\n\"\"\""
+
+        if self.simulado:
+            # Dry-run por defecto: se valida todo y se devuelve el resumen SIN llamar a la API.
+            trampa = revisar_guarda_precios("vale 50000 por nequi", "pagas en mpago.la/2xYz")
+            self.acciones.append(
+                f"[dry-run] identidad + alcance cargados ({len(system_prompt)} caracteres)")
+            self.acciones.append(
+                f"[dry-run] lead validado: {self.lead.get('email')} (etapa {self.lead.get('stage')})")
+            self.acciones.append(
+                f"[dry-run] modo: {'correo en frío' if es_frio else 'respuesta a un mensaje'}")
+            self.acciones.append(
+                "[dry-run] herramientas listas: " + ", ".join(h["name"] for h in HERRAMIENTAS))
+            self.acciones.append(
+                f"[dry-run] guarda de precios viva: {len(trampa)} motivos en el texto trampa")
+            self.acciones.append("[dry-run] sin API, sin escritura en BD, sin correos")
+            return {"ok": True, "motivo": "dry_run_sin_api", "acciones": self.acciones,
+                    "costo_usd": 0.0, "turnos": 0}
 
         mensajes: list[dict] = [{"role": "user", "content": contexto_lead}]
         api_key = (self.cfg.get("ANTHROPIC_API_KEY") or "").strip()
@@ -639,7 +821,7 @@ class AgenteVentas:
             mensajes.append({"role": "user", "content": resultados})
 
             # Tope de gasto revisado también dentro del loop: nunca pasarse del saldo.
-            if not self.dry_run and database.agent_cost_today_usd() >= self.conf["max_usd"]:
+            if self._gasto_hoy_usd() >= self.conf["max_usd"]:
                 razon_fin = "tope_gasto"
                 break
         else:
@@ -656,17 +838,23 @@ def main() -> None:
     parser.add_argument("--lead-email", required=True, help="Correo del lead.")
     parser.add_argument("--mensaje", default="", help="Mensaje que escribió el lead (vacío = correo en frío).")
     parser.add_argument("--nicho", default="", help="Nicho, si se conoce.")
-    parser.add_argument("--dry-run", action="store_true", help="No escribe en la BD ni encola nada.")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="No escribe en la BD, no encola y NO llama a la API (no gasta saldo).")
+    parser.add_argument("--con-api", action="store_true",
+                        help="Solo junto a --dry-run: prueba contra la API real. Gasta saldo; "
+                             "respeta los topes de correos y de USD antes y dentro del loop.")
     args = parser.parse_args()
 
     cfg = cargar_config()
-    if not args.dry_run:
+    # Con --dry-run --con-api hace falta la BD para poder leer los topes del día.
+    if not args.dry_run or args.con_api:
         database.init_db()
 
-    agente = AgenteVentas(cfg, dry_run=args.dry_run)
+    agente = AgenteVentas(cfg, dry_run=args.dry_run, con_api=args.con_api)
     resultado = agente.correr(lead_email=args.lead_email, mensaje_lead=args.mensaje, nicho=args.nicho)
     resultado["modelo"] = agente.modelo
     resultado["dry_run"] = args.dry_run
+    resultado["con_api"] = agente.con_api
     print(json.dumps(resultado, ensure_ascii=False, indent=2))
 
 
