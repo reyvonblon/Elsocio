@@ -301,7 +301,139 @@ class TestEstados(BaseContenido):
         self.assertEqual(len(database.list_content()), 1)
 
 
-# --------------------------------------------------- 6. el panel no se deja inyectar
+# ------------------------------------------- 6. escena isométrica y etiquetas del reel
+
+class TestEscenaYEtiquetas(BaseContenido):
+    def test_escena_viaja_en_la_nota_sin_pisar_la_humana(self) -> None:
+        content_id = self.encolar_limpia(tipo="video", nota="revisar el cierre",
+                                         escena="flujo", etiquetas=["CUENTAS", "ENTREGADO"])
+        pieza = database.get_content(content_id)
+        self.assertEqual(content_manager.nota_humana(pieza["nota"]), "revisar el cierre")
+        self.assertEqual(content_manager.leer_reel(pieza["nota"]),
+                         ("flujo", ["CUENTAS", "ENTREGADO"]))
+
+    def test_la_escena_por_defecto_no_ensucia_la_nota(self) -> None:
+        content_id = self.encolar_limpia(tipo="video", nota="sin más")
+        self.assertEqual(database.get_content(content_id)["nota"], "sin más")
+
+    def test_escena_inventada_revienta_antes_de_tocar_la_bd(self) -> None:
+        with self.assertRaises(ValueError):
+            content_manager.encolar(tipo="video", gancho="Frase limpia", escena="tiktok3d")
+        self.assertEqual(database.list_content(), [])
+
+    def test_etiqueta_con_precio_bloquea_igual_que_el_gancho(self) -> None:
+        """Una etiqueta acaba QUEMADA en el video: la guarda tiene que verla."""
+        with self.assertRaises(content_manager.GuardaBloqueada):
+            content_manager.encolar(tipo="video", gancho="Frase limpia",
+                                    etiquetas=["DESDE 50.000"])
+        self.assertEqual(database.list_content(), [])
+
+    def test_etiqueta_con_separador_revienta(self) -> None:
+        with self.assertRaises(ValueError):
+            content_manager.encolar(tipo="video", gancho="Frase limpia",
+                                    etiquetas=["UNO|DOS"])
+
+    def test_etiqueta_demasiado_larga_revienta(self) -> None:
+        with self.assertRaises(ValueError):
+            content_manager.encolar(tipo="video", gancho="Frase limpia",
+                                    etiquetas=["x" * (content_manager.MAX_LARGO_ETIQUETA + 1)])
+
+    def test_las_etiquetas_se_limpian_y_se_cortan(self) -> None:
+        crudas = ["  uno\n dos ", "", "   ", "tres", "cuatro", "cinco", "seis"]
+        limpias = content_manager.normalizar_etiquetas(crudas)
+        self.assertEqual(limpias[0], "uno dos")
+        self.assertEqual(len(limpias), content_manager.MAX_ETIQUETAS)
+
+    def test_generar_manda_escena_y_etiquetas_en_los_props(self) -> None:
+        content_id = self.encolar_limpia(tipo="video", guion="Uno\nDos",
+                                         escena="agenda", etiquetas=["ENTRAN", "AGENDADO"])
+        self.assertTrue(content_manager.generar(content_id)["generado"])
+        import json
+        props = json.loads(self.run.call_args[0][0][2])
+        self.assertEqual(props["escena"], "agenda")
+        self.assertEqual(props["etiquetas"], ["ENTRAN", "AGENDADO"])
+
+    def test_sin_escena_los_props_llevan_la_de_por_defecto(self) -> None:
+        content_id = self.encolar_limpia(tipo="video", guion="Uno")
+        content_manager.generar(content_id)
+        import json
+        props = json.loads(self.run.call_args[0][0][2])
+        self.assertEqual(props["escena"], content_manager.ESCENA_DEFECTO)
+        self.assertEqual(props["etiquetas"], [])
+
+    def test_generar_con_escena_manda_sobre_la_encolada_y_se_guarda(self) -> None:
+        content_id = self.encolar_limpia(tipo="video", guion="Uno", escena="flujo")
+        res = content_manager.generar(content_id, escena="espacio3d")
+        self.assertEqual(res["escena"], "espacio3d")
+        self.assertEqual(content_manager.leer_reel(
+            database.get_content(content_id)["nota"])[0], "espacio3d")
+
+    def test_etiqueta_metida_a_mano_en_la_bd_la_frena_la_guarda(self) -> None:
+        content_id = self.encolar_limpia(tipo="video", guion="Uno")
+        with sqlite3.connect(self.db) as con:
+            con.execute("UPDATE content_queue SET nota=? WHERE id=?",
+                        ("[reel] escena=flujo; etiquetas=VALE 90000", content_id))
+        with self.assertRaises(content_manager.GuardaBloqueada):
+            content_manager.generar(content_id)
+        self.run.assert_not_called()
+
+    def test_escena_inventada_en_la_nota_cae_en_la_de_por_defecto(self) -> None:
+        self.assertEqual(content_manager.leer_reel("[reel] escena=lego")[0],
+                         content_manager.ESCENA_DEFECTO)
+
+    def test_la_escena_no_estorba_a_un_post(self) -> None:
+        content_id = self.encolar_limpia(tipo="post", escena="agenda")
+        self.assertTrue(content_manager.generar(content_id)["generado"])
+        self.assertIn("generar_post.sh", self.run.call_args[0][0][0])
+
+    def test_publicar_sin_nota_no_pisa_la_que_ya_estaba(self) -> None:
+        """El bug de `nota=nota` a secas: publicar sin nota borraba la nota y la escena."""
+        content_id = self.encolar_limpia(nota="viene del lead #4", escena="flujo")
+        content_manager.publicar(content_id, resultado="silencio")
+        pieza = database.get_content(content_id)
+        self.assertEqual(content_manager.nota_humana(pieza["nota"]), "viene del lead #4")
+        self.assertEqual(content_manager.leer_reel(pieza["nota"])[0], "flujo")
+
+    def test_publicar_con_nota_nueva_conserva_la_escena(self) -> None:
+        content_id = self.encolar_limpia(nota="vieja", escena="agenda",
+                                         etiquetas=["AGENDADO"])
+        content_manager.publicar(content_id, resultado="agendó", nota="salió bien")
+        pieza = database.get_content(content_id)
+        self.assertEqual(content_manager.nota_humana(pieza["nota"]), "salió bien")
+        self.assertEqual(content_manager.leer_reel(pieza["nota"]),
+                         ("agenda", ["AGENDADO"]))
+
+
+# --------------------------------------------- 7. el CLI con escena y etiquetas
+
+class TestCliEscena(BaseContenido):
+    def test_encolar_con_escena_y_etiquetas_desde_el_cli(self) -> None:
+        código = content_manager.main([
+            "encolar", "--tipo", "video", "--gancho", "Una frase limpia y sobria.",
+            "--escena", "espacio3d", "--etiquetas", "TU PLANO", "RENDER"])
+        self.assertEqual(código, 0)
+        pieza = database.list_content()[0]
+        self.assertEqual(content_manager.leer_reel(pieza["nota"]),
+                         ("espacio3d", ["TU PLANO", "RENDER"]))
+
+    def test_el_cli_rechaza_una_escena_que_no_existe(self) -> None:
+        with self.assertRaises(SystemExit):
+            content_manager.main(["encolar", "--gancho", "Frase limpia",
+                                  "--escena", "lego"])
+
+    def test_el_cli_devuelve_codigo_2_si_una_etiqueta_trae_precio(self) -> None:
+        código = content_manager.main([
+            "--dry-run", "encolar", "--gancho", "Frase limpia",
+            "--etiquetas", "DESDE 50.000"])
+        self.assertEqual(código, 2)
+
+    def test_el_cli_devuelve_codigo_2_si_una_etiqueta_es_invalida(self) -> None:
+        código = content_manager.main([
+            "--dry-run", "encolar", "--gancho", "Frase limpia", "--etiquetas", "A|B"])
+        self.assertEqual(código, 2)
+
+
+# --------------------------------------------------- 8. el panel no se deja inyectar
 
 class TestPanelEscapa(unittest.TestCase):
     def test_mensaje_de_la_landing_va_escapado(self) -> None:
@@ -328,7 +460,7 @@ class TestPanelEscapa(unittest.TestCase):
         self.assertIn("Cola de contenido", html)
 
 
-# ------------------------------------------- 7. nada de esto toca lo real, de verdad
+# ------------------------------------------- 9. nada de esto toca lo real, de verdad
 
 class TestNadaRealSeToca(unittest.TestCase):
     def test_el_cli_en_dry_run_no_toca_la_bd_real(self) -> None:

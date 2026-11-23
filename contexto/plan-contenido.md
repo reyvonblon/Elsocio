@@ -29,7 +29,9 @@ que renderiza 1080x1350 y publicación 100% manual. No habla con el motor de ven
    renderiza y no escribe en `RESULTADOS_MERCADO.md`.
 3. **Plantilla Remotion vertical** `ReelVertical` 1080x1920 @ 30 fps, alineada a la guía: gancho desde
    el frame 1, un bloque cada 2 s, texto que se acumula, palabra final resaltada en vino, push-in lento
-   y una línea héroe que se dibuja. La duración se calcula con `calculateMetadata` según cuántos
+   y **texto en la mitad superior con una escena isométrica como único elemento héroe en la
+   inferior** (`src/EscenasIsometricas.tsx`: `contraste`, `flujo`, `espacio3d`, `agenda`; se
+   eligen con `--escena` y sus tooltips con `--etiquetas`). La duración se calcula con `calculateMetadata` según cuántos
    bloques trae el guion, así no quedan segundos muertos al final.
 4. **`generar_video.sh`**: acepta `--reel` con props JSON y **detecta el relleno de ceros de los frames
    en tiempo de ejecución**. Remotion no siempre usa 4 dígitos (con pocos frames genera `element-0.png`),

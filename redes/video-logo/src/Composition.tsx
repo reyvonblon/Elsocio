@@ -32,6 +32,8 @@ export const MyComposition = () => {
         defaultProps={{
           gancho: "El taller te entregó algo distinto a lo que pediste.",
           bloques: ["Otra vez.", "No fue mala suerte.", "Fue la ficha técnica."],
+          escena: "contraste" as const,
+          etiquetas: [],
           cierre: "Cuéntanos tu problema · link en bio",
         }}
       />

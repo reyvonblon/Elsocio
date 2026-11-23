@@ -6,6 +6,12 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+import {
+  EscenaIsometrica,
+  NOMBRES_ESCENA,
+  PALETA,
+  type NombreEscena,
+} from "./EscenasIsometricas";
 
 /**
  * Plantilla vertical 1080x1920 @ 30fps para Reels de El Socio.
@@ -16,7 +22,8 @@ import {
  *  - El texto se ACUMULA: las palabras anteriores se quedan en pantalla.
  *  - Cada palabra entra con "estado fantasma": gris primero, blanco al asentar.
  *  - Push-in lento y constante de cámara sobre fondo fijo.
- *  - Un solo elemento héroe animado por escena (la línea que se dibuja).
+ *  - TEXTO ARRIBA, ESCENA ISOMÉTRICA ABAJO (§3.1): el texto nunca cae sobre el
+ *    centro de interés, y la escena es el único elemento héroe de la pieza.
  *  - Fondo con grilla sutil, paleta de El Socio. Cero cifras en el componente.
  */
 
@@ -24,18 +31,39 @@ export const reelVerticalSchema = z.object({
   gancho: z.string(),
   bloques: z.array(z.string()),
   cierre: z.string(),
+  // Opcionales: las piezas viejas (y `content_manager.py` antes de este paso) no los mandan.
+  escena: z.enum(NOMBRES_ESCENA).optional(),
+  etiquetas: z.array(z.string()).optional(),
 });
 
 type Props = z.infer<typeof reelVerticalSchema>;
 
-// Zonas seguras de Reels (convención de la plataforma, ver guía §6).
+// Zonas seguras de Reels (convención de la plataforma, ver guía §5).
 const SAFE_TOP = 220;
 const SAFE_BOTTOM = 380;
+const SAFE_LEFT = 80;
+/** La columna de botones de Reels vive aquí: nada de contenido a la derecha de esto. */
+const SAFE_RIGHT = 160;
 
-const TINTA = "#0a0a0a";
-const BLANCO = "#ffffff";
-const FANTASMA = "#6e6e73";
-const VINO = "#9c1c2e";
+/**
+ * El push-in escala TODO el encuadre, así que el contenido tiene que empezar más adentro
+ * que la zona segura o al final del video se sale por arriba. Este colchón es la cuenta:
+ * con 1200x720 de caja y 1.05 de escala, el máximo cae justo dentro de la zona segura.
+ */
+const COLCHON_PUSH = 60;
+const PUSH_MAX = 1.05;
+const DERIVA_MAX = -20;
+
+const ANCHO_CAJA = 1080 - SAFE_LEFT - SAFE_RIGHT - 2 * COLCHON_PUSH; // 720
+const ALTO_CAJA = 1920 - SAFE_TOP - SAFE_BOTTOM - 2 * COLCHON_PUSH; // 1200
+/** Mitad superior para el texto, mitad inferior para la escena, cierre quemado al pie. */
+const ALTO_TEXTO = 600;
+const ALTO_CIERRE = 110;
+
+const TINTA = PALETA.tinta;
+const BLANCO = PALETA.blanco;
+const FANTASMA = PALETA.gris;
+const VINO = PALETA.vino;
 
 const FUENTE =
   "-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Helvetica,Arial,sans-serif";
@@ -82,43 +110,17 @@ const Palabra: React.FC<{ texto: string; entraEn: number; resaltada?: boolean }>
     <span
       style={{
         display: "inline-block",
-        marginRight: 18,
+        marginRight: 16,
         opacity: avance,
         translate: `0px ${subida}px`,
         color: asentado > 0.5 ? BLANCO : FANTASMA,
         background: resaltada && asentado > 0.5 ? VINO : "transparent",
-        padding: resaltada ? "0 14px" : undefined,
+        padding: resaltada ? "0 12px" : undefined,
         borderRadius: resaltada ? 8 : undefined,
       }}
     >
       {texto}
     </span>
-  );
-};
-
-/** Elemento héroe: una línea que se dibuja sola. Uno por escena, nunca dos. */
-const LineaHeroe: React.FC<{ entraEn: number }> = ({ entraEn }) => {
-  const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
-  const trazo = interpolate(frame, [entraEn * fps, (entraEn + 0.8) * fps], [1, 0], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.cubic),
-  });
-
-  return (
-    <svg width={720} height={120} viewBox="0 0 720 120" style={{ marginTop: 40 }}>
-      <path
-        d="M 20 80 C 180 20, 420 110, 700 40"
-        fill="none"
-        stroke={VINO}
-        strokeWidth={10}
-        strokeLinecap="round"
-        pathLength={1}
-        strokeDasharray={1}
-        strokeDashoffset={trazo}
-      />
-    </svg>
   );
 };
 
@@ -131,16 +133,22 @@ export const CIERRE_SEG = 3;
 export const duracionEnFrames = (nBloques: number, fps = 30): number =>
   Math.round((GANCHO_SEG + Math.max(0, nBloques) * CADENCIA_SEG + CIERRE_SEG) * fps);
 
-export const ReelVertical: React.FC<Props> = ({ gancho, bloques, cierre }) => {
+export const ReelVertical: React.FC<Props> = ({
+  gancho,
+  bloques,
+  cierre,
+  escena = "contraste",
+  etiquetas = [],
+}) => {
   const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
 
   // Push-in lento y constante: lo que separa "presentación" de "video producido".
-  const escala = interpolate(frame, [0, durationInFrames], [1, 1.08], {
+  const escala = interpolate(frame, [0, durationInFrames], [1, PUSH_MAX], {
     extrapolateRight: "clamp",
     easing: Easing.inOut(Easing.quad),
   });
-  const deriva = interpolate(frame, [0, durationInFrames], [0, -26], {
+  const deriva = interpolate(frame, [0, durationInFrames], [0, DERIVA_MAX], {
     extrapolateRight: "clamp",
     easing: Easing.inOut(Easing.quad),
   });
@@ -165,69 +173,109 @@ export const ReelVertical: React.FC<Props> = ({ gancho, bloques, cierre }) => {
         style={{
           scale: String(escala),
           translate: `0px ${deriva}px`,
-          paddingTop: SAFE_TOP,
-          paddingBottom: SAFE_BOTTOM,
-          paddingLeft: 80,
-          paddingRight: 80,
-          alignItems: "flex-start",
-          // Centrado mientras no haya ilustración isométrica abajo. Cuando la haya,
-          // esto vuelve a "flex-start" y la escena ocupa la mitad inferior (guía §4.1).
-          justifyContent: "center",
+          paddingTop: SAFE_TOP + COLCHON_PUSH,
+          paddingBottom: SAFE_BOTTOM + COLCHON_PUSH,
+          paddingLeft: SAFE_LEFT + COLCHON_PUSH,
+          paddingRight: SAFE_RIGHT + COLCHON_PUSH,
+          flexDirection: "column",
+          alignItems: "stretch",
+          justifyContent: "flex-start",
           fontFamily: FUENTE,
         }}
       >
-        {/* Gancho: presente desde el frame 1, el bloque de texto más grande. */}
+        {/* ---------------- mitad superior: solo texto ---------------- */}
         <div
           style={{
-            fontSize: 84,
-            fontWeight: 800,
-            lineHeight: 1.12,
-            letterSpacing: "-0.02em",
-            color: BLANCO,
-            maxWidth: 900,
+            width: ANCHO_CAJA,
+            // Ocupa lo que necesite hasta su tope; el aire sobrante se lo queda la escena,
+            // que lo reparte arriba y abajo. Un guion largo se recorta aquí antes que
+            // invadir la mitad inferior.
+            flex: "0 0 auto",
+            maxHeight: ALTO_TEXTO,
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            justifyContent: "flex-start",
           }}
         >
-          {gancho}
-        </div>
-
-        <LineaHeroe entraEn={1.2} />
-
-        {/* Bloques acumulativos: lo anterior NO se borra. */}
-        <div
-          style={{
-            marginTop: 30,
-            fontSize: 58,
-            fontWeight: 700,
-            lineHeight: 1.35,
-            letterSpacing: "-0.01em",
-            maxWidth: 900,
-          }}
-        >
-          {bloques.map((bloque, i) => (
-            <Palabra
-              key={`${i}-${bloque}`}
-              texto={bloque}
-              entraEn={inicioBloques + i * cadencia}
-              resaltada={i === bloques.length - 1}
-            />
-          ))}
-        </div>
-
-        {/* Cierre seco. */}
-        {cierreVisible ? (
+          {/* Gancho: presente desde el frame 1, el bloque de texto más grande. */}
           <div
             style={{
-              marginTop: 48,
-              fontSize: 46,
-              fontWeight: 600,
+              fontSize: 72,
+              fontWeight: 800,
+              lineHeight: 1.08,
+              letterSpacing: "-0.02em",
               color: BLANCO,
-              opacity: cierreAvance,
-              translate: `0px ${interpolate(cierreAvance, [0, 1], [16, 0])}px`,
             }}
           >
-            {cierre}
+            {gancho}
           </div>
-        ) : null}
+
+          {/* Bloques acumulativos: lo anterior NO se borra. */}
+          <div
+            style={{
+              marginTop: 34,
+              fontSize: 44,
+              fontWeight: 700,
+              lineHeight: 1.32,
+              letterSpacing: "-0.01em",
+            }}
+          >
+            {bloques.map((bloque, i) => (
+              <Palabra
+                key={`${i}-${bloque}`}
+                texto={bloque}
+                entraEn={inicioBloques + i * cadencia}
+                resaltada={i === bloques.length - 1}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* ---------------- mitad inferior: la escena isométrica ---------------- */}
+        <div
+          style={{
+            width: ANCHO_CAJA,
+            flex: 1,
+            minHeight: ALTO_CAJA - ALTO_TEXTO - ALTO_CIERRE,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <EscenaIsometrica
+            escena={escena as NombreEscena}
+            inicio={inicioBloques}
+            cadencia={cadencia}
+            etiquetas={etiquetas}
+          />
+        </div>
+
+        {/* ---------------- cierre quemado al pie (guía §3.7) ---------------- */}
+        <div
+          style={{
+            width: ANCHO_CAJA,
+            flex: "0 0 auto",
+            height: ALTO_CIERRE,
+            display: "flex",
+            alignItems: "flex-end",
+          }}
+        >
+          {cierreVisible ? (
+            <div
+              style={{
+                fontSize: 40,
+                fontWeight: 600,
+                color: BLANCO,
+                opacity: cierreAvance,
+                translate: `0px ${interpolate(cierreAvance, [0, 1], [16, 0])}px`,
+              }}
+            >
+              {cierre}
+            </div>
+          ) : null}
+        </div>
       </AbsoluteFill>
     </AbsoluteFill>
   );
