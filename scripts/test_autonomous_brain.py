@@ -31,6 +31,7 @@ import ig_publisher  # noqa: E402
 import instalar_piloto  # noqa: E402
 import panel_mensajes  # noqa: E402
 import panel_server  # noqa: E402
+import prospect_hunter  # noqa: E402
 import sales_agent  # noqa: E402
 import socio_cerebro  # noqa: E402
 import voice_engine  # noqa: E402
@@ -88,7 +89,15 @@ class BaseAutonoma(unittest.TestCase):
 
 class TestNichoSinPreciosYLanding(unittest.TestCase):
     def test_recorta_precios_de_todos_los_nichos_reales(self) -> None:
-        for slug in ("fichas-tecnicas-ropa", "modelado-3d-espacios"):
+        esperados = {
+            "automatizacion-agencias-estudios",
+            "ecommerce-catalogo-visual",
+            "fichas-tecnicas-ropa",
+            "modelado-3d-espacios",
+        }
+        archivos = [p.stem for p in sorted(sales_agent.NICHOS_DIR.glob("*.md")) if not p.name.startswith("_")]
+        self.assertTrue(esperados.issubset(set(archivos)), f"faltan nichos: {archivos}")
+        for slug in archivos:
             with self.subTest(slug=slug):
                 limpio = sales_agent.cargar_contexto_nicho_sin_precios(slug)
                 self.assertTrue(limpio, "quedó vacío")
@@ -97,6 +106,41 @@ class TestNichoSinPreciosYLanding(unittest.TestCase):
                 self.assertNotIn("Queries", limpio)
                 self.assertEqual(sales_agent.revisar_guarda_precios(limpio), [],
                                  f"se coló un precio en {slug}: {limpio}")
+        consolidado = sales_agent.cargar_todos_los_nichos_sin_precios()
+        self.assertTrue(consolidado)
+        self.assertEqual(sales_agent.revisar_guarda_precios(consolidado), [])
+
+    def test_prospect_hunter_intercala_nichos_cubre_4_ciudades_y_filtra_ruido(self) -> None:
+        queries = prospect_hunter.load_nicho_queries()
+        self.assertGreaterEqual(len(queries), 40)
+        # Primeras 4 queries deben venir de 4 nichos distintos (round-robin real).
+        primeros_4_nichos = {nicho for _, _, nicho in queries[:4]}
+        self.assertEqual(len(primeros_4_nichos), 4, queries[:4])
+        texto_total = " ".join(q for q, _, _ in queries)
+        for ciudad in ("Medellin", "Bogota", "Cali", "Barranquilla"):
+            self.assertIn(ciudad, texto_total)
+
+        self.assertTrue(prospect_hunter._is_blocked_domain("unidadeditorial.es"))
+        self.assertTrue(prospect_hunter._is_blocked_domain("alcaldia.gov.co"))
+        self.assertTrue(prospect_hunter._is_blocked_domain("unal.edu.co"))
+        self.assertFalse(prospect_hunter._is_blocked_domain("estudiocreativo.com.co"))
+
+        cands = prospect_hunter._clean_email_candidates(
+            "mailto:gestionhumana@marca.com.co info@marca.com.co attcliente@unidadeditorial.es",
+            "marca.com.co",
+        )
+        self.assertEqual(cands, ["info@marca.com.co"])
+
+        antes_db = huella(DB_REAL)
+        with mock.patch.object(prospect_hunter, "search_duckduckgo_urls", return_value=["https://marca1.com.co/"]), \
+             mock.patch.object(prospect_hunter, "scrape_site_contact", return_value={
+                 "nombre": "Equipo Marca", "empresa": "Marca", "correo": "hola@marca1.com.co",
+                 "whatsapp": "", "nicho": "ecommerce-catalogo-visual",
+                 "industria": "E-commerce", "servicio": "E-commerce",
+             }):
+            res = prospect_hunter.discover_new_prospects(needed=1, max_queries=2, dry_run=True)
+        self.assertEqual(len(res), 1)
+        self.assertEqual(huella(DB_REAL), antes_db)
 
     def test_bloquea_path_traversal_en_nicho(self) -> None:
         self.assertEqual(sales_agent.cargar_contexto_nicho_sin_precios("../../.env"), "")

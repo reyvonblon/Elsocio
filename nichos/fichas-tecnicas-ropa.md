@@ -13,11 +13,20 @@
 - "¿Cuántas veces el taller te ha entregado algo distinto a lo que pediste?" Vender la ficha como seguro contra errores de producción, no como "diseño bonito".
 
 ## Dónde están (canales)
-- Instagram de marcas de ropa pequeñas, ferias de moda emergente, grupos de WhatsApp de confección.
+- Tiendas web e Instagram de marcas de ropa independientes en Medellín, Bogotá, Cali y Barranquilla, ferias de moda emergente y talleres de paquete completo.
 
 ## Queries de búsqueda
 ```queries
-marca de ropa independiente Medellin contacto mayorista | Marca de Ropa Independiente
-diseñador de moda emergente Medellin contacto | Diseño de Moda Emergente
-confeccion por lotes maquila ropa Medellin contacto | Confección y Maquila de Ropa
+tienda ropa diseño independiente Medellin contacto | Marca de Ropa Independiente
+tienda ropa diseño independiente Bogota contacto | Marca de Ropa Independiente
+tienda ropa diseño independiente Cali contacto | Marca de Ropa Independiente
+tienda ropa moda diseño Barranquilla contacto | Marca de Ropa Independiente
+ropa urbana streetwear tienda Medellin contacto | Diseño de Moda Emergente
+moda sostenible diseño autor Bogota contacto | Diseño de Moda Emergente
+vestidos de baño ropa deportiva tienda Cali contacto | Marca de Moda y Swimwear
+vestidos de baño resortwear tienda Barranquilla contacto | Marca de Moda y Resortwear
+confeccion paquete completo ropa Medellin contacto | Confección y Paquete Completo
+confeccion paquete completo ropa Bogota contacto | Confección y Paquete Completo
+taller confeccion maquila ropa Cali contacto | Confección y Maquila de Ropa
+taller confeccion dotaciones moda Barranquilla contacto | Confección y Maquila de Ropa
 ```

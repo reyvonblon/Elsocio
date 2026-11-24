@@ -74,6 +74,25 @@
     border-color:rgba(255,255,255,0.4);
     background:rgba(255,255,255,0.06);
   }
+  input[type="tel"]{
+    width:100%;
+    background:rgba(255,255,255,0.04);
+    border:1px solid rgba(255,255,255,0.18);
+    border-radius:14px;
+    padding:16px 18px;
+    font-size:16px;
+    color:var(--white);
+    font-family:inherit;
+    outline:none;
+    transition:border-color .15s ease, background .15s ease;
+  }
+  input[type="tel"]::placeholder{
+    color:rgba(255,255,255,0.32);
+  }
+  input[type="tel"]:focus{
+    border-color:rgba(255,255,255,0.4);
+    background:rgba(255,255,255,0.06);
+  }
   button{
     appearance:none;
     border:none;
@@ -211,8 +230,17 @@
   <div class="caption">La Solución a Todos tus Problemas</div>
 
   <form id="contact-form">
+    <input
+      type="tel"
+      id="phone"
+      name="telefono"
+      autocomplete="tel"
+      placeholder="Tu número de WhatsApp"
+      required
+    />
     <textarea
       id="message"
+      name="mensaje"
       placeholder="Escribe lo que necesitas o cuenta tu problema aquí"
       required
     ></textarea>
@@ -227,19 +255,23 @@
   const WEB3FORMS_ACCESS_KEY = "46d00c8d-fd0c-4d90-9309-dce17eedba23";
   const form = document.getElementById("contact-form");
   const textarea = document.getElementById("message");
+  const phoneInput = document.getElementById("phone");
 
   form.addEventListener("submit", function (e) {
     e.preventDefault();
     const text = textarea.value.trim();
-    if (!text) return;
+    const phone = phoneInput.value.trim();
+    if (!text || !phone) return;
 
     fetch("https://api.web3forms.com/submit", {
       method: "POST",
+      keepalive: true,
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify({
         access_key: WEB3FORMS_ACCESS_KEY,
         subject: "Nuevo mensaje — landing El Socio",
         from_name: "Landing El Socio",
+        telefono: phone,
         mensaje: text,
       }),
     }).catch(function () {});

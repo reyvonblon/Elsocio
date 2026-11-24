@@ -3,6 +3,8 @@
 data/*.db
 data/*.csv
 data/*.log
+data/*.lock
+RELEVO_CONTEXTO_*.md
 panel/mensajes.html
 __pycache__/
 *.pyc

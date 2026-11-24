@@ -13,12 +13,20 @@
 - "Antes de gastar en construcción, mira exactamente cómo va a quedar." Mostrar un render de ejemplo siempre, nunca vender el servicio sin una imagen.
 
 ## Dónde están (canales)
-- Webs de diseñadores de interiores, foros de audio/podcast, directorios de arquitectos independientes.
+- Sitios web de estudios de interiorismo, arquitectos remodeladores, constructoras de locales comerciales y estudios de audio en Medellín, Bogotá, Cali y Barranquilla.
 
 ## Queries de búsqueda
 ```queries
-diseñador de interiores independiente Medellin contacto | Diseño de Interiores Independiente
-arquitecto remodelacion habitaciones Medellin contacto | Arquitectura y Remodelación
-estudio de grabacion montaje acustico Medellin contacto | Estudios de Grabación Nuevos
-diseño de locales comerciales remodelacion Medellin contacto | Diseño de Locales Comerciales
+estudio diseño de interiores Medellin contacto | Diseño de Interiores
+estudio diseño de interiores Bogota contacto | Diseño de Interiores
+estudio diseño de interiores Cali contacto | Diseño de Interiores
+estudio diseño de interiores Barranquilla contacto | Diseño de Interiores
+arquitectos remodelacion espacios comerciales Medellin contacto | Arquitectura y Remodelación
+arquitectos remodelacion locales oficinas Bogota contacto | Arquitectura y Remodelación
+arquitectura remodelacion residencial comercial Cali contacto | Arquitectura y Remodelación
+arquitectura remodelacion locales comerciales Barranquilla contacto | Arquitectura y Remodelación
+estudio de grabacion diseño acustico Medellin contacto | Estudios de Grabación y Acústica
+estudio de grabacion produccion musical Bogota contacto | Estudios de Grabación y Acústica
+diseño de locales comerciales mobiliario Cali contacto | Diseño de Locales Comerciales
+diseño comercial adecuacion locales Barranquilla contacto | Diseño de Locales Comerciales
 ```
