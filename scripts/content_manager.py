@@ -229,10 +229,15 @@ def generar(
         cmd = [str(GENERAR_POST), pieza["gancho"], nombre]
         salida = REDES_DIR / "posts" / f"{nombre}.png"
     else:
+        cap_crudo = (pieza["caption"] or "").strip()
+        cierre_reel = (
+            cap_crudo if (cap_crudo and "\n" not in cap_crudo and len(cap_crudo) <= 58)
+            else "Cuéntanos tu problema · link en bio"
+        )
         props = json.dumps({
             "gancho": pieza["gancho"],
             "bloques": _bloques_de(pieza["guion"]),
-            "cierre": (pieza["caption"] or "Cuéntanos tu problema · link en bio").strip(),
+            "cierre": cierre_reel,
             "escena": escena_ok,
             "etiquetas": etiquetas_ok,
         }, ensure_ascii=False)

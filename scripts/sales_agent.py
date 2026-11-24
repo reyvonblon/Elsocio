@@ -37,6 +37,13 @@ import database  # noqa: E402
 
 IDENTIDAD_FILE = PROJECT_ROOT / "contexto" / "identidad.md"
 ALCANCE_FILE = PROJECT_ROOT / "contexto" / "MODO_TRABAJO.md"
+NICHOS_DIR = PROJECT_ROOT / "nichos"
+SKILLS_CALIDAD = (
+    PROJECT_ROOT / ".claude" / "skills" / "calidad" / "humanizer.md",
+    PROJECT_ROOT / ".claude" / "skills" / "calidad" / "psicologia-y-estatus.md",
+    PROJECT_ROOT / ".claude" / "skills" / "calidad" / "editor-implacable.md",
+    PROJECT_ROOT / ".claude" / "skills" / "ventas" / "redactar-outreach.md",
+)
 
 API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -50,6 +57,7 @@ TIMEOUT_HTTP = 120
 # USD por millón de tokens. Verificado contra la tabla de precios de la API.
 PRECIOS_USD_MTOK = {
     "claude-sonnet-5": {"entrada": 2.00, "salida": 10.00, "cache_escritura": 2.50, "cache_lectura": 0.20},
+    "claude-sonnet-5-5": {"entrada": 2.00, "salida": 10.00, "cache_escritura": 2.50, "cache_lectura": 0.20},
     "claude-haiku-4-5": {"entrada": 1.00, "salida": 5.00, "cache_escritura": 1.25, "cache_lectura": 0.10},
     "claude-opus-5": {"entrada": 5.00, "salida": 25.00, "cache_escritura": 6.25, "cache_lectura": 0.50},
 }
@@ -433,6 +441,64 @@ ALIAS_HERRAMIENTAS = {
 
 # ------------------------------------------------------------------ system prompt
 
+_SECCIONES_NICHO_PROHIBIDAS = ("precio", "queries", "tarifa", "valor")
+
+
+def cargar_contexto_nicho_sin_precios(nicho: str) -> str:
+    """Lee cliente ideal, dolor y ángulo de `nichos/<nicho>.md` SIN precios ni cifras.
+
+    `nichos/*.md` incluye `## Precio de referencia` para consulta humana de Raymond.
+    El código recorta esa sección entera y además filtra línea por línea con
+    `revisar_guarda_precios`, de modo que ninguna cifra llegue jamás al modelo.
+    """
+    limpio = re.sub(r"[^a-zA-Z0-9_-]", "", (nicho or "").strip())
+    if not limpio or limpio.startswith("_"):
+        return ""
+    ruta = NICHOS_DIR / f"{limpio}.md"
+    if not ruta.exists():
+        return ""
+
+    bloques_seguros: list[str] = []
+    saltar_seccion = False
+    en_bloque_codigo = False
+    for linea in ruta.read_text(encoding="utf-8").splitlines():
+        cruda = linea.strip()
+        if cruda.startswith("```"):
+            en_bloque_codigo = not en_bloque_codigo
+            continue
+        if en_bloque_codigo:
+            continue
+        if cruda.startswith("## "):
+            titulo_bajo = _plano(cruda[3:])
+            saltar_seccion = any(p in titulo_bajo for p in _SECCIONES_NICHO_PROHIBIDAS)
+            if not saltar_seccion:
+                bloques_seguros.append(cruda)
+            continue
+        if saltar_seccion:
+            continue
+        # Filtro adicional línea por línea: ni una cifra ni moneda se cuela.
+        if cruda and revisar_guarda_precios(cruda):
+            continue
+        bloques_seguros.append(linea)
+
+    resultado = "\n".join(bloques_seguros).strip()
+    return resultado
+
+
+def cargar_todos_los_nichos_sin_precios() -> str:
+    """Devuelve todos los nichos activos limpios de precios (para el cerebro de contenido)."""
+    if not NICHOS_DIR.is_dir():
+        return ""
+    partes = []
+    for ruta in sorted(NICHOS_DIR.glob("*.md")):
+        if ruta.name.startswith("_"):
+            continue
+        limpio = cargar_contexto_nicho_sin_precios(ruta.stem)
+        if limpio:
+            partes.append(limpio)
+    return "\n\n".join(partes)
+
+
 def construir_system_prompt() -> str:
     """Se lee del disco en cada corrida. Nunca se copia al código.
 
@@ -447,12 +513,17 @@ def construir_system_prompt() -> str:
         inicio = texto.find("## Alcance del agente")
         if inicio != -1:
             partes.append(texto[inicio:])
+    for ruta_skill in SKILLS_CALIDAD:
+        if ruta_skill.exists():
+            # Se pasa cada línea que pudiera contradecir la regla de cero cifras con aviso claro.
+            partes.append(ruta_skill.read_text(encoding="utf-8").strip())
     partes.append(
         "## Reglas del motor (las aplica el código, no tú)\n"
         "- El correo se encola, no se envía al instante. Si una herramienta te devuelve un error, "
         "corrige y vuelve a intentar con otro texto; no insistas con el mismo.\n"
-        "- Cualquier cifra, precio, forma de pago o link de pago en un correo lo bloquea el código. "
-        "Si necesitas hablar de valor, usa pedir_precio_al_dueno.\n"
+        "- Cualquier cifra, número de precio, porcentaje, forma de pago o link de pago en un correo "
+        "lo bloquea el código (incluso si una guía general menciona 'un número', en El Socio usa "
+        "SIEMPRE casos reales cualitativos sin cifras). Si necesitas hablar de valor, usa pedir_precio_al_dueno.\n"
         "- Tienes pocos turnos. Haz lo necesario y termina."
     )
     return "\n\n".join(partes)
@@ -811,13 +882,17 @@ class AgenteVentas:
         motivo_seguimiento = (motivo_seguimiento or "").strip()
         es_seguimiento = es_frio and bool(motivo_seguimiento)
         system_prompt = construir_system_prompt()
+        nicho_efectivo = (self.lead.get("nicho") or nicho or "").strip()
+        guia_nicho = cargar_contexto_nicho_sin_precios(nicho_efectivo)
         contexto_lead = (
             f"Lead: {self.lead.get('email')}\n"
             f"Empresa: {self.lead.get('company') or '(no se sabe)'}\n"
-            f"Nicho: {self.lead.get('nicho') or nicho or '(no se sabe)'}\n"
+            f"Nicho: {nicho_efectivo or '(no se sabe)'}\n"
             f"Etapa actual: {self.lead.get('stage')}\n"
             f"Notas previas: {(self.lead.get('notes') or '(ninguna)')[:600]}\n\n"
         )
+        if guia_nicho:
+            contexto_lead += f"Contexto y dolor real del nicho (úsalos sin inventar datos):\n{guia_nicho}\n\n"
         if es_seguimiento:
             contexto_lead += (
                 "Esto NO es un primer contacto en frío: es un SEGUIMIENTO programado de un correo "

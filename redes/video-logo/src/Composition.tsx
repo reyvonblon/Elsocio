@@ -24,7 +24,10 @@ export const MyComposition = () => {
         durationInFrames={duracionEnFrames(3)}
         fps={30}
         calculateMetadata={({ props }) => ({
-          durationInFrames: duracionEnFrames(props.bloques?.length ?? 3),
+          durationInFrames:
+            props.duracionFrames && props.duracionFrames > 0
+              ? props.duracionFrames
+              : duracionEnFrames(props.bloques?.length ?? 3),
         })}
         width={1080}
         height={1920}

@@ -49,6 +49,13 @@ def load_env_file() -> dict[str, str]:
     ):
         if os.environ.get(k):
             values[k] = os.environ[k]
+    if not (values.get("ANTHROPIC_API_KEY") or "").strip() and database.DB_PATH.exists():
+        try:
+            guardada = (database.get_settings().get("anthropic_api_key") or "").strip()
+            if guardada:
+                values["ANTHROPIC_API_KEY"] = guardada
+        except Exception:
+            pass
     return values
 
 
@@ -860,6 +867,76 @@ def run_sales_agent_cycle(*, dry_run: bool = False, max_leads: int = 5) -> dict[
     return resumen
 
 
+_RE_CORREO_LANDING = re.compile(r"\b[a-zA-Z0-9._%+-]{2,64}@[a-zA-Z0-9.-]{2,190}\.[a-zA-Z]{2,12}\b")
+
+
+def _extraer_cuerpo_lineas(msg: email.message.Message) -> str:
+    """Extrae el texto del mensaje conservando saltos de línea para leer campos Web3Forms."""
+    plano = html_txt = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if "attachment" in str(part.get("Content-Disposition") or "").lower():
+                continue
+            payload = part.get_payload(decode=True)
+            if not payload:
+                continue
+            dec = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+            if part.get_content_type() == "text/plain" and not plano:
+                plano = dec
+            elif part.get_content_type() == "text/html" and not html_txt:
+                html_txt = re.sub(r"(?i)<br\s*/?>|</p>|</tr>|</div>", "\n", dec)
+                html_txt = re.sub(r"<[^>]+>", " ", html_txt)
+                html_txt = html.unescape(html_txt)
+    else:
+        payload = msg.get_payload(decode=True)
+        if payload:
+            dec = payload.decode(msg.get_content_charset() or "utf-8", errors="replace")
+            if msg.get_content_type() == "text/html":
+                dec = re.sub(r"(?i)<br\s*/?>|</p>|</tr>|</div>", "\n", dec)
+                dec = re.sub(r"<[^>]+>", " ", dec)
+                dec = html.unescape(dec)
+            plano = dec
+    return (plano or html_txt).strip()
+
+
+def extraer_campos_landing(msg: email.message.Message, correo_propio: str = "") -> dict[str, str]:
+    """Saca `telefono`, `correo` y `mensaje` limpios de una notificación de Web3Forms."""
+    crudo = _extraer_cuerpo_lineas(msg)
+    snippet = _extract_text_snippet(msg)
+    telefono = ""
+    mensaje = ""
+
+    m_tel = re.search(r"(?im)^(?:telefono|teléfono|phone|whatsapp)\s*[:\s]+(.+)$", crudo)
+    if m_tel:
+        telefono = re.sub(r"\s+", " ", m_tel.group(1)).strip()[:60]
+
+    m_msg = re.search(
+        r"(?ims)^(?:mensaje|message)\s*[:\s]+(.+?)(?:\n(?:[a-zA-Záéíóú_ -]{2,20}:|--|Submitted|Enviado)|\Z)",
+        crudo,
+    )
+    if m_msg:
+        mensaje = re.sub(r"\s+", " ", m_msg.group(1)).strip()
+    if not mensaje:
+        mensaje = snippet
+
+    propio = (correo_propio or "").strip().lower()
+    correo_visitante = ""
+    for hallado in _RE_CORREO_LANDING.findall(crudo):
+        cand = hallado.strip().lower()
+        if cand == propio or cand.endswith("@web3forms.com") or "noreply" in cand or "notify@" in cand:
+            continue
+        correo_visitante = cand
+        break
+
+    resumen = f"WhatsApp: {telefono} — {mensaje}" if (telefono and telefono not in mensaje) else mensaje
+    return {
+        "telefono": telefono,
+        "correo": correo_visitante,
+        "mensaje": mensaje[:600],
+        "resumen": resumen[:600],
+    }
+
+
 def sync_landing_messages(max_messages: int = 40) -> dict[str, object]:
     with _DISPATCH_LOCK:
         database.init_db()
@@ -869,7 +946,8 @@ def sync_landing_messages(max_messages: int = 40) -> dict[str, object]:
         if not (user and password and imap_host):
             return {"imap_ready": False, "checked": 0, "new_messages": 0}
 
-        checked, new_messages = 0, 0
+        checked, new_messages, agent_runs = 0, 0, 0
+        agent_ready = _tiene_anthropic_key(cfg)
         try:
             with imaplib.IMAP4_SSL(imap_host, 993, timeout=15) as imap:
                 imap.login(user, password)
@@ -888,29 +966,56 @@ def sync_landing_messages(max_messages: int = 40) -> dict[str, object]:
                     if database.has_landing_message(msg_id):
                         continue
 
-                    snippet = _extract_text_snippet(msg)
-                    mensaje = snippet
-                    match = re.search(r"(?im)^mensaje[:\s]+(.*)", snippet)
-                    if match:
-                        mensaje = match.group(1).strip()
+                    campos = extraer_campos_landing(msg, correo_propio=user)
+                    resumen_panel = campos["resumen"]
 
-                    database.add_landing_message(msg_id, mensaje)
+                    database.add_landing_message(msg_id, resumen_panel)
                     new_messages += 1
 
+                    try:
+                        registrar_resultado_mercado(
+                            "(landing)", "(formulario web entrante)", "landing", 1, "respondió",
+                            resumen_panel[:180],
+                        )
+                    except Exception:
+                        pass
+
                     notify_mac_desktop(
-                        "💬 Nuevo mensaje en la landing de El Socio",
-                        mensaje[:180],
+                        "💬 Nuevo cliente desde la landing de El Socio",
+                        resumen_panel[:180],
                     )
                     create_calendar_event(
-                        "📩 Revisar mensaje de la landing (El Socio)",
-                        f"Mensaje recibido por la landing:\n\n{mensaje}",
+                        "📩 Atender lead de la landing (El Socio)",
+                        f"Recibido por la landing:\n\n{resumen_panel}",
                         datetime.now() + timedelta(hours=1),
                     )
+
+                    # Si además dejó correo electrónico, entra al pipeline y el agente lo atiende solo.
+                    if campos["correo"]:
+                        database.upsert_lead(
+                            name="Visitante Landing", company="", email=campos["correo"],
+                            whatsapp=campos["telefono"], nicho="", service_interest=campos["mensaje"][:120],
+                            source="landing", stage="interesado_cita",
+                            notes=f"Escribió en landing: {resumen_panel[:300]}",
+                        )
+                        if agent_ready:
+                            agente = _load_sales_agent()
+                            if agente is not None:
+                                try:
+                                    agente.AgenteVentas(cfg).correr(
+                                        lead_email=campos["correo"],
+                                        mensaje_lead=resumen_panel,
+                                    )
+                                    agent_runs += 1
+                                except Exception:
+                                    pass
         except Exception as exc:
-            return {"imap_ready": True, "error": str(exc), "checked": checked, "new_messages": new_messages}
+            return {"imap_ready": True, "error": str(exc), "checked": checked,
+                    "new_messages": new_messages, "agent_runs": agent_runs}
 
         panel_mensajes.regenerate()
-        return {"imap_ready": True, "checked": checked, "new_messages": new_messages}
+        return {"imap_ready": True, "checked": checked, "new_messages": new_messages,
+                "agent_runs": agent_runs}
 
 
 def resumen_en_seco() -> dict[str, object]:
@@ -944,6 +1049,8 @@ def resumen_en_seco() -> dict[str, object]:
         "seguimientos_vencidos": len(database.list_due_followups(limit=100)),
         "correos_del_agente_hoy": database.agent_emails_queued_today(),
         "gasto_del_agente_hoy_usd": round(database.agent_cost_today_usd(), 6),
+        "piezas_contenido_hoy": database.content_created_today(),
+        "posts_ig_publicados_hoy": database.ig_published_today(),
         "silencios_por_registrar": registrar_silencios_vencidos(dry_run=True),
     })
     return salida
@@ -995,15 +1102,18 @@ def main() -> None:
         print(json.dumps(ensure_daily_pipeline(force=True), ensure_ascii=False, indent=2))
         return
 
+    # Orden real de negocio: 1º reabastecer leads -> 2º el agente redacta y encola -> 3º SMTP despacha.
     replenish_res = ensure_daily_pipeline()
-    dispatch_res = dispatch_due_jobs()
-    dispatch_res["replenish"] = replenish_res
-    # El agente solo entra si hay API key. Si falta, el motor de siempre no se entera.
+    agent_res: dict[str, object] | None = None
     if _tiene_anthropic_key():
         try:
-            dispatch_res["sales_agent"] = run_sales_agent_cycle()
+            agent_res = run_sales_agent_cycle()
         except Exception as exc:
-            dispatch_res["sales_agent"] = {"ran": False, "error": str(exc)[:200]}
+            agent_res = {"ran": False, "error": str(exc)[:200]}
+    dispatch_res = dispatch_due_jobs()
+    dispatch_res["replenish"] = replenish_res
+    if agent_res is not None:
+        dispatch_res["sales_agent"] = agent_res
     # Tandas que ya vencieron sin respuesta: dato real para RESULTADOS_MERCADO.md.
     try:
         dispatch_res["resultados_mercado"] = registrar_silencios_vencidos()

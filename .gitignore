@@ -13,6 +13,9 @@ redes/video-logo/out/
 contexto/referencias_video/*.mov
 contexto/referencias_video/*.mp4
 redes/posts/*.png
+redes/posts/*.jpg
 redes/voz/*.aiff
 redes/voz/*.m4a
+redes/voz/*.mp3
+redes/voz/*.wav
 redes/video-logo/out/

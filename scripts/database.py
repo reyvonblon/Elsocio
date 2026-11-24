@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS content_queue (
     estado TEXT NOT NULL DEFAULT 'borrador',
     archivo TEXT DEFAULT '',
     nota TEXT DEFAULT '',
+    ig_media_id TEXT DEFAULT '',
+    error_ig TEXT DEFAULT '',
     created_at TEXT, updated_at TEXT, published_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_content_queue_estado ON content_queue(estado, created_at);
@@ -82,6 +84,10 @@ _MIGRACIONES = {
         ("tokens_cache_creacion", "INTEGER DEFAULT 0"),
         ("tokens_cache_lectura", "INTEGER DEFAULT 0"),
         ("costo_usd", "REAL DEFAULT 0.0"),
+    ],
+    "content_queue": [
+        ("ig_media_id", "TEXT DEFAULT ''"),
+        ("error_ig", "TEXT DEFAULT ''"),
     ],
 }
 
@@ -560,9 +566,9 @@ def list_content(*, estado: str = "", limit: int = 100) -> list[dict]:
 
 def update_content(
     content_id: int, *, estado: str | None = None, archivo: str | None = None,
-    nota: str | None = None,
+    nota: str | None = None, ig_media_id: str | None = None, error_ig: str | None = None,
 ) -> dict | None:
-    """Cambia estado/archivo/nota de una pieza. `publicado` sella `published_at`."""
+    """Cambia estado/archivo/nota/ig de una pieza. `publicado` sella `published_at`."""
     if estado is not None and estado not in CONTENT_ESTADOS:
         raise ValueError(f"estado inválido: {estado!r}")
     campos, valores = [], []
@@ -578,6 +584,12 @@ def update_content(
     if nota is not None:
         campos.append("nota=?")
         valores.append(nota)
+    if ig_media_id is not None:
+        campos.append("ig_media_id=?")
+        valores.append(ig_media_id)
+    if error_ig is not None:
+        campos.append("error_ig=?")
+        valores.append(error_ig[:500])
     if not campos:
         return get_content(content_id)
     campos.append("updated_at=?")
@@ -594,3 +606,58 @@ def count_content_by_estado() -> dict[str, int]:
             "SELECT estado, COUNT(*) AS n FROM content_queue GROUP BY estado"
         ).fetchall()
         return {r["estado"]: int(r["n"]) for r in rows}
+
+
+def content_created_today() -> int:
+    """Piezas activas creadas hoy (excluye descartadas) para el tope diario del cerebro."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM content_queue WHERE estado!='descartado' AND created_at LIKE ?",
+            (f"{today}%",),
+        ).fetchone()
+        return int(row["n"])
+
+
+def ig_published_today() -> int:
+    """Piezas realmente publicadas hoy en Instagram (tope diario duro de publicación)."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM content_queue WHERE estado='publicado' AND published_at LIKE ?",
+            (f"{today}%",),
+        ).fetchone()
+        return int(row["n"])
+
+
+def list_recent_hooks(limit: int = 40) -> list[str]:
+    """Últimos ganchos encolados, para que el cerebro de contenido nunca se repita."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT gancho FROM content_queue ORDER BY id DESC LIMIT ?",
+            (max(1, int(limit)),),
+        ).fetchall()
+        return [str(r["gancho"]).strip() for r in rows if r["gancho"]]
+
+
+def list_recent_market_signals(limit: int = 12) -> dict[str, list[str]]:
+    """Dolores y respuestas reales recientes (SIN correos ni datos personales de terceros)."""
+    with _conn() as conn:
+        landing = conn.execute(
+            "SELECT mensaje FROM landing_messages ORDER BY id DESC LIMIT ?",
+            (max(1, int(limit)),),
+        ).fetchall()
+        replies = conn.execute(
+            "SELECT intent, snippet FROM processed_replies "
+            "WHERE intent IN ('interesado_cita', 'respuesta_recibida') "
+            "ORDER BY rowid DESC LIMIT ?",
+            (max(1, int(limit)),),
+        ).fetchall()
+        return {
+            "landing": [str(r["mensaje"] or "").strip()[:240] for r in landing if r["mensaje"]],
+            "respuestas": [
+                f"[{r['intent']}] {str(r['snippet'] or '').strip()[:240]}"
+                for r in replies if r["snippet"]
+            ],
+        }
+

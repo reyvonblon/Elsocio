@@ -34,6 +34,10 @@ export const reelVerticalSchema = z.object({
   // Opcionales: las piezas viejas (y `content_manager.py` antes de este paso) no los mandan.
   escena: z.enum(NOMBRES_ESCENA).optional(),
   etiquetas: z.array(z.string()).optional(),
+  // Tiempos exactos medidos por `voice_engine.py` para sincronía milimétrica voz <-> subtítulo.
+  tiemposBloques: z.array(z.number()).optional(),
+  tiempoCierre: z.number().optional(),
+  duracionFrames: z.number().optional(),
 });
 
 type Props = z.infer<typeof reelVerticalSchema>;
@@ -139,6 +143,8 @@ export const ReelVertical: React.FC<Props> = ({
   cierre,
   escena = "contraste",
   etiquetas = [],
+  tiemposBloques,
+  tiempoCierre,
 }) => {
   const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
@@ -153,10 +159,19 @@ export const ReelVertical: React.FC<Props> = ({
     easing: Easing.inOut(Easing.quad),
   });
 
-  // Un bloque cada 2 s, empezando después del gancho. El gancho está desde el frame 1.
-  const inicioBloques = GANCHO_SEG;
-  const cadencia = CADENCIA_SEG;
-  const inicioCierre = inicioBloques + bloques.length * cadencia;
+  // Si viene locución medida por `voice_engine.py`, cada bloque entra al milisegundo
+  // exacto en que habla la voz; si no, usa la cadencia fija de 2 s de la guía.
+  const tieneSincronia = Array.isArray(tiemposBloques) && tiemposBloques.length > 0;
+  const inicioBloques =
+    tieneSincronia && typeof tiemposBloques?.[0] === "number" ? tiemposBloques[0] : GANCHO_SEG;
+  const inicioCierre =
+    typeof tiempoCierre === "number" && tiempoCierre > 0
+      ? tiempoCierre
+      : GANCHO_SEG + bloques.length * CADENCIA_SEG;
+  const cadencia =
+    tieneSincronia && bloques.length > 0
+      ? Math.max(1.4, (inicioCierre - inicioBloques) / Math.max(1, bloques.length))
+      : CADENCIA_SEG;
 
   const cierreVisible = frame >= inicioCierre * fps;
   const cierreAvance = interpolate(
@@ -222,14 +237,17 @@ export const ReelVertical: React.FC<Props> = ({
               letterSpacing: "-0.01em",
             }}
           >
-            {bloques.map((bloque, i) => (
-              <Palabra
-                key={`${i}-${bloque}`}
-                texto={bloque}
-                entraEn={inicioBloques + i * cadencia}
-                resaltada={i === bloques.length - 1}
-              />
-            ))}
+            {bloques.map((bloque, i) => {
+              const tMedido = tiemposBloques?.[i];
+              return (
+                <Palabra
+                  key={`${i}-${bloque}`}
+                  texto={bloque}
+                  entraEn={typeof tMedido === "number" ? tMedido : GANCHO_SEG + i * CADENCIA_SEG}
+                  resaltada={i === bloques.length - 1}
+                />
+              );
+            })}
           </div>
         </div>
 

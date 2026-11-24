@@ -44,10 +44,10 @@ que renderiza 1080x1350 y publicación 100% manual. No habla con el motor de ven
 7. **Pruebas**: `scripts/test_content_manager.py`, 36 pruebas en seco (BD y archivo de resultados
    temporales, subprocess parcheado, cero red). Las 128 anteriores siguen en verde.
 
-## Paso 3 — Retroalimentación con leads reales (pendiente)
+## Paso 3 — Cerebro autónomo, voz humana sincronizada e Instagram oficial ✅ hecho
 
-- Cruzar lo que responden los leads (`agent_log`, respuestas clasificadas) con los ganchos publicados:
-  qué dolor concreto hace que alguien conteste, y convertirlo en la frase del próximo post.
-- Al revés también: la frase que más guarda/comenta la gente entra al banco de ganchos del outreach.
-- **Comparte el mismo tope de 0.50 USD/día del agente de ventas.** No es un presupuesto aparte: si el día
-  ya se gastó contestando leads, el contenido espera. Vender va primero que publicar.
+- **`scripts/voice_engine.py`** (100% Python stdlib, cero `say` robótico): locución neuronal humana en español colombiano (`es-CO-GonzaloNeural` por WebSocket TLS + `Sec-MS-GEC` v2 gratis sin claves, o `OPENAI_API_KEY` / `ELEVENLABS_API_KEY` si se configuran). Limpia símbolos visuales (`·`, URLs), pasa cada frase por `revisar_guarda_precios()`, sincroniza `tiemposBloques` / `tiempoCierre` / `duracionFrames` en `ReelVertical.tsx` y masteriza la voz con `ffmpeg` a `-14 LUFS`.
+- **`scripts/content_brain.py`**: lee identidad, guía de video, `FRASES.md`, skills de calidad, `nichos/*.md` (recortados sin precios en código), `RESULTADOS_MERCADO.md` y señales reales de clientes (landing + respuestas, sin PII), prohibiendo repetir ganchos previos. **Comparte el mismo tope diario de `0.50 USD` de `sales_agent.py`** en `agent_log` (vender siempre va primero que publicar).
+- **`scripts/ig_publisher.py`**: publicación 100% por API oficial de Meta (`graph.instagram.com` / `graph.facebook.com`), conversión automática `.png → .jpg` con `/usr/bin/sips` (Meta rechaza PNG con error 2207005), subida HTTPS efímera de 1h, polling `status_code == FINISHED`, tope diario (`IG_MAX_DAILY_POSTS`), interruptor `ig_auto_publish` y rollback limpio si Meta falla.
+- **`scripts/panel_server.py` + `scripts/socio_cerebro.py` + `scripts/instalar_piloto.py`**: panel interactivo en puerto `8787` con preview de imagen/`<video>` + interruptor Autónomo/Preview, y orquestador único para `launchd` cada 15 min.
+- **Pruebas**: `scripts/test_autonomous_brain.py` (23 pruebas nuevas en seco; 206 pruebas totales en verde).
