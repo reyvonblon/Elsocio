@@ -451,6 +451,13 @@ _PALABRAS_DE_NEGOCIO = {
     "servicios", "logistica", "creativo", "creativa", "publicidad", "agencia",
     "inmobiliaria", "constructora", "distribuciones", "importaciones", "soluciones",
     "glosas", "renova", "plus", "pro", "max", "center", "centro", "clinica",
+    "creaciones", "scsas", "manufacturas", "industrias", "comercializadora",
+    "distribuidora", "fabrica", "taller", "talleres", "almacen", "almacenes",
+    "colombia", "oficial", "ventas", "shopping", "market", "mercado", "mundo",
+    "cuero", "cueros", "eventos", "evento", "sistemas", "sistema", "papeleria",
+    "insumos", "predios", "inmuebles", "arq", "ing", "abg", "weare", "somos",
+    "regalos", "accesorios", "uniformes", "dotaciones", "muebleria", "ferreteria",
+    "importadora", "exportadora", "mayorista", "outlet", "online", "web", "digital",
 }
 
 # Nombres de pila frecuentes en Colombia: la señal más confiable de que hay
@@ -475,15 +482,38 @@ _NOMBRES_PILA = {
     "jhon", "jhonatan", "johana", "johanna", "jonathan", "kevin", "leidy", "luz",
     "maicol", "milena", "nelson", "nubia", "omar", "orlando", "rodolfo", "stefania",
     "wilmer", "yeison", "yuliana",
+    "adriana", "alejandra", "alexander", "alexandra", "amparo", "anderson",
+    "angelica", "astrid", "aura", "camilo", "carmen", "cecilia", "consuelo",
+    "cristhian", "dairo", "deisy", "diber", "dora", "eliana", "emerson",
+    "ferney", "gina", "gina", "hugo", "ingrid", "jaider", "jairo", "jeison",
+    "jenny", "jessica", "jesus", "jhoan", "john", "jonnathan", "jose", "juliet",
+    "katherine", "lady", "leonel", "leydy", "lizeth", "magda", "maribel",
+    "marlon", "mauro", "mayra", "melissa", "mildred", "nathalia", "nataly",
+    "nestor", "norma", "paulina", "ramon", "rene", "rocio", "salomon", "saray",
+    "sonia", "stella", "tania", "teresa", "wilson", "yair", "yenny", "yuri",
+    "zoraida", "esperanza", "fanny", "gilberto", "jacqueline", "jimena",
+    "lucero", "luisfer", "miriam", "nidia", "piedad", "yamile",
+    "erika", "erica", "wallace", "ruben", "lina", "cristina", "angelica",
+    "felipe", "jorge", "yudy", "yenifer", "jennifer", "karol", "karina",
+    "valeria", "valentina", "isabella", "antonia", "emilia", "martin",
+    "matias", "tomas", "simon", "emmanuel", "alonso", "edison", "fredy",
+    "harold", "ivonne", "janeth", "lilia", "marcel", "mireya", "nohora",
+    "olivia", "rosalba", "ruth", "shirley", "yolima",
 }
 
 _PARTICULAS_NOMBRE = {"de", "del", "la", "las", "los", "van", "da", "di"}
+
+# Trozos que no son nombre aunque viajen en el correo: "etc.erikatarazona@".
+_RUIDO_EN_SALUDO = {"etc", "sas", "ltda", "co", "col", "acc", "arq", "ing", "dr", "dra"}
 
 
 def _partes_alfabeticas(local: str) -> list[str]:
     """Trocea la parte local de un correo en palabras, ignorando números de relleno."""
     crudo = re.sub(r"\d+", " ", local or "")
-    return [p for p in re.split(r"[._\-]+", crudo) if p.isalpha() and len(p) >= 2]
+    # El .strip() importa: sin él "camilacarmona27" quedaba como "camilacarmona "
+    # y el espacio final hacía fallar .isalpha(), así que una persona real se iba a la basura.
+    partes = (p.strip() for p in re.split(r"[._\-\s]+", crudo))
+    return [p for p in partes if p.isalpha() and len(p) >= 2]
 
 
 def _parece_correo_de_persona(local: str, dominio: str = "") -> bool:
@@ -516,8 +546,23 @@ def _parece_correo_de_persona(local: str, dominio: str = "") -> bool:
     # nombre.apellido / nombre_apellido: la señal más fuerte de persona real.
     if len(partes) >= 2 and all(3 <= len(p) <= 18 for p in partes):
         return True
-    # Un solo nombre suelto que no es palabra de buzón (mariana@, santiago@).
-    return len(partes) == 1 and 3 <= len(partes[0]) <= 14
+    # Una sola palabra suelta solo es persona si se reconoce como nombre de pila
+    # (mariana@, santiago@). Si no, es la marca disfrazada: acuattro@, taro@,
+    # cafealtoperfil@, ccialviva@ — y escribirle a eso es escribirle a nadie.
+    if len(partes) != 1:
+        return False
+    # Inicial + apellido: "j.perez@", "alejandra.r@". La inicial delata persona.
+    crudo = [x.strip() for x in re.split(r"[._\-\s]+", re.sub(r"\d+", " ", bajo))]
+    crudo = [x for x in crudo if x.isalpha()]
+    if len(crudo) >= 2 and any(len(x) == 1 for x in crudo):
+        return True
+    unica = partes[0]
+    if not (3 <= len(unica) <= 14):
+        return False
+    if unica in _NOMBRES_PILA:
+        return True
+    # "yesidcan", "cindypao": nombre real con relleno pegado al final.
+    return any(unica.startswith(n) and len(n) >= 4 for n in _NOMBRES_PILA)
 
 
 def nombre_de_pila_desde_email(email_addr: str) -> str:
@@ -532,20 +577,33 @@ def nombre_de_pila_desde_email(email_addr: str) -> str:
     if crudo and len(crudo[0]) == 1:
         return ""
     partes = [p for p in _partes_alfabeticas(local) if p not in _PARTICULAS_NOMBRE]
+    partes = [p for p in partes if p not in _RUIDO_EN_SALUDO]
     if not partes:
         return ""
     for parte in partes:
         if parte in _NOMBRES_PILA:
             return parte.capitalize()
     # "yesidcan" / "cindypao": el nombre va al principio, el resto es relleno.
-    for nombre in sorted(_NOMBRES_PILA, key=len, reverse=True):
-        if partes[0].startswith(nombre) and len(nombre) >= 4:
-            return nombre.capitalize()
-    return partes[0].capitalize()
+    candidatos = [
+        n for n in _NOMBRES_PILA if len(n) >= 4 and partes[0].startswith(n)
+    ]
+    if candidatos:
+        largo = max(candidatos, key=len)
+        # "luisalfesp" podría ser Luis o Luisa: equivocarse de persona en el saludo
+        # es peor que no saludar por nombre, así que ahí saluda a la empresa.
+        if len(candidatos) > 1 and len(partes[0]) > len(largo):
+            return ""
+        return largo.capitalize()
+    # Nada reconocible ("fpedraza", "einfo"): mejor saludar a la empresa que
+    # escribir "Hola Fpedraza" y quemar el correo en la primera línea.
+    return ""
 
 
 def _clean_email_candidates(raw_html: str, site_domain: str) -> list[str]:
     text = urllib.parse.unquote(html.unescape(raw_html or "")).replace("%40", "@")
+    # Los sitios con JSON embebido traen \u003e / \u0026: sin desescapar, el correo
+    # salía como "u003einfo@megapredios.com.co" y pasaba todos los filtros.
+    text = re.sub(r"\\?u00[0-9a-fA-F]{2}", " ", text)
     found = EMAIL_RE.findall(text)
     scored: list[tuple[int, str]] = []
     seen: set[str] = set()
@@ -581,6 +639,11 @@ def _clean_email_candidates(raw_html: str, site_domain: str) -> list[str]:
         scored.append((score, em_low))
     scored.sort(key=lambda x: (-x[0], x[1]))
     return [em for _, em in scored]
+
+
+def _clean_email_candidates_sort(emails: list[str], site_domain: str) -> list[str]:
+    """Reordena correos ya limpios con la misma puntuación (persona primero)."""
+    return _clean_email_candidates(" ".join(emails), site_domain)
 
 
 def _looks_relevant_spanish_site(raw_html: str, dom: str) -> bool:
@@ -794,30 +857,62 @@ def scrape_site_contact(url: str, industry: str, nicho: str) -> dict[str, str] |
     emails = _clean_email_candidates(home_html, dom)
     sub_html_found = ""
 
-    if not emails:
+    # La home casi siempre publica el buzón de la empresa; los nombres de las
+    # personas viven en "nosotros", "equipo" y "contacto". Antes esas páginas solo
+    # se miraban si la home no traía NADA, así que nos quedábamos con el info@ y
+    # nunca veíamos al dueño. Ahora se miran siempre y se juntan los candidatos.
+    hay_persona = any(
+        _parece_correo_de_persona(em.split("@", 1)[0], em.split("@")[-1]) for em in emails
+    )
+    if not hay_persona:
         candidate_links: list[str] = []
-        contact_hints = ("contact", "cotiz", "nosotros", "quienes", "acerca", "about", "mayorist", "escribenos")
+        contact_hints = (
+            "contact", "cotiz", "nosotros", "quienes", "acerca", "about", "mayorist",
+            "escribenos", "equipo", "team", "staff", "directorio", "gerencia",
+        )
         for href in LINK_RE.findall(home_html):
             low = href.lower()
             if any(k in low for k in contact_hints):
                 full = urllib.parse.urljoin(url, href)
                 if _domain_of(full) == dom and full not in candidate_links and full != url:
                     candidate_links.append(full)
-        for fallback_slug in ("/contacto", "/contactenos", "/pages/contacto"):
+        for fallback_slug in ("/contacto", "/contactenos", "/nosotros", "/equipo", "/pages/contacto"):
             fb_url = urllib.parse.urljoin(url, fallback_slug)
             if fb_url not in candidate_links:
                 candidate_links.append(fb_url)
-        for sub_url in candidate_links[:3]:
+        for sub_url in candidate_links[:4]:
             try:
                 _, sub_html = _fetch_url(sub_url, timeout=5, allow_insecure_fallback=True)
-                if sub_html:
-                    emails = _clean_email_candidates(sub_html, dom)
-                    if emails:
-                        sub_html_found = sub_html
-                        break
             except Exception:
                 continue
+            if not sub_html:
+                continue
+            nuevos = _clean_email_candidates(sub_html, dom)
+            if not nuevos:
+                continue
+            if not sub_html_found:
+                sub_html_found = sub_html
+            for em in nuevos:
+                if em not in emails:
+                    emails.append(em)
+            if any(
+                _parece_correo_de_persona(em.split("@", 1)[0], em.split("@")[-1]) for em in nuevos
+            ):
+                sub_html_found = sub_html
+                break
+        # Quedan ordenados como los puntúa el buscador: la persona primero.
+        emails = _clean_email_candidates_sort(emails, dom)
 
+    if not emails:
+        return None
+
+    # Filtro duro: solo personas. Un buzón de empresa (info@, ventas@, hola@) lo lee
+    # una recepcionista o nadie: 18 de los primeros 26 correos fueron a buzones y
+    # respondieron 0. Si el sitio no publica a una persona, el sitio se descarta.
+    emails = [
+        em for em in emails
+        if _parece_correo_de_persona(em.split("@", 1)[0], em.split("@")[-1])
+    ]
     if not emails:
         return None
 
@@ -1156,6 +1251,30 @@ def enriquecer_leads_pendientes(*, limit: int = 30, dry_run: bool = False) -> di
     }
 
 
+def guardar_prospectos(items: list[dict[str, str]]) -> int:
+    """Mete en la cola lo descubierto. Corrido a mano, el buscador solo imprimía:
+    encontraba prospectos reales y los tiraba a la basura al terminar."""
+    database.init_db()
+    guardados = 0
+    for row in items:
+        correo = (row.get("correo") or "").strip().lower()
+        if not correo:
+            continue
+        try:
+            database.upsert_lead(
+                name=row.get("nombre", ""), company=row.get("empresa", ""), email=correo,
+                whatsapp=row.get("whatsapp", ""), nicho=row.get("nicho", ""),
+                service_interest=row.get("servicio", ""), source="prospeccion_auto",
+                stage="nuevo_lead",
+                notes="Descubierto, analizado y verificado (MX OK) por El Socio",
+                website=row.get("website", ""), dossier=row.get("dossier", ""),
+            )
+            guardados += 1
+        except Exception:
+            continue
+    return guardados
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Buscador y verificador MX de prospectos reales.")
     parser.add_argument("--needed", type=int, default=15, help="Cupo de prospectos a descubrir.")
@@ -1163,6 +1282,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--enriquecer-pendientes", action="store_true",
                         help="Analiza y limpia los leads en frío pendientes en data/el_socio.db.")
     parser.add_argument("--dry-run", action="store_true", help="Prueba en seco sin tocar data/el_socio.db.")
+    parser.add_argument("--guardar", action="store_true",
+                        help="Guarda lo descubierto en data/el_socio.db como nuevo_lead (llena la cola).")
     args = parser.parse_args(argv)
 
     if args.enriquecer_pendientes:
@@ -1177,10 +1298,15 @@ def main(argv: list[str] | None = None) -> int:
         max_queries=args.max_queries,
         dry_run=args.dry_run,
     )
+    guardados = 0
+    if args.guardar and not args.dry_run:
+        guardados = guardar_prospectos(items)
+
     print(json.dumps({
         "dry_run": args.dry_run,
         "needed": args.needed,
         "found": len(items),
+        "guardados": guardados,
         "cupo_lleno": len(items) >= args.needed,
         "prospects": items,
     }, ensure_ascii=False, indent=2))

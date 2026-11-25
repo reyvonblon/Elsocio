@@ -479,8 +479,23 @@ def ensure_daily_pipeline(*, force: bool = False) -> dict[str, object]:
     deficit = daily_limit - (sent_today + pending_today)
     _LAST_REPLENISH_TS = time.time()
 
-    if deficit <= 0:
-        return {"deficit": 0, "sent_today": sent_today, "pending_today": pending_today}
+    # Colchón: buscar solo lo del día deja la cola en cero todas las noches, y el
+    # buscador tarda ~30 min en traer gente real. Con colchón el motor nunca se
+    # queda sin a quién escribirle mientras busca a los siguientes.
+    try:
+        colchon_objetivo = int(settings.get("autopilot_buffer_leads", "45"))
+    except ValueError:
+        colchon_objetivo = 45
+    en_cola = database.count_leads_en_cola()
+    falta_colchon = max(0, colchon_objetivo - en_cola)
+    a_buscar = max(deficit, falta_colchon)
+
+    if a_buscar <= 0:
+        return {
+            "deficit": max(0, deficit), "sent_today": sent_today,
+            "pending_today": pending_today, "en_cola": en_cola,
+            "colchon_objetivo": colchon_objetivo,
+        }
 
     added_discovered = 0
     added_reengaged = 0
@@ -488,9 +503,9 @@ def ensure_daily_pipeline(*, force: bool = False) -> dict[str, object]:
     try:
         import prospect_hunter  # noqa: E402
 
-        discovered = prospect_hunter.discover_new_prospects(needed=deficit, queries_to_run=3)
+        discovered = prospect_hunter.discover_new_prospects(needed=a_buscar, queries_to_run=3)
         for row in discovered:
-            if deficit <= 0:
+            if a_buscar <= 0:
                 break
             lead_id = database.upsert_lead(
                 name=row["nombre"], company=row["empresa"], email=row["correo"],
@@ -500,6 +515,7 @@ def ensure_daily_pipeline(*, force: bool = False) -> dict[str, object]:
                 website=row.get("website", ""), dossier=row.get("dossier", ""),
             )
             added_discovered += 1
+            a_buscar -= 1
             deficit -= 1
     except Exception:
         pass
@@ -522,6 +538,8 @@ def ensure_daily_pipeline(*, force: bool = False) -> dict[str, object]:
         "daily_limit": daily_limit, "sent_today": sent_today,
         "added_discovered": added_discovered, "added_reengaged": added_reengaged,
         "remaining_deficit": max(0, deficit),
+        "en_cola": database.count_leads_en_cola(),
+        "colchon_objetivo": colchon_objetivo,
     }
 
 

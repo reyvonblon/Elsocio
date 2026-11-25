@@ -79,6 +79,31 @@ def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+# Clasifica cada `herramienta` real que escribe `log_agent_action` para el monitor móvil
+# (panel_api.py) y para decidir cuándo avisar por notificación push. Único lugar de verdad:
+# si se agrega una herramienta nueva en sales_agent.py/content_brain.py/ig_publisher.py,
+# se agrega aquí también o cae en el default ("(acción)", "exito").
+HERRAMIENTA_ETIQUETA: dict[str, tuple[str, str]] = {
+    "enviar_correo": ("Encoló un correo de prospección", "exito"),
+    "llamada_api": ("Pensó la siguiente jugada con la IA", "exito"),
+    "cambiar_etapa": ("Actualizó la etapa de un lead", "exito"),
+    "programar_seguimiento": ("Programó un seguimiento", "exito"),
+    "baja_automatica": ("Un lead se dio de baja", "exito"),
+    "rechazo_lead_cerrado": ("No insistió: el lead ya estaba cerrado", "exito"),
+    "avisar_al_dueno": ("Te marcó algo para revisar", "alerta"),
+    "pedir_precio_al_dueno": ("Necesita que confirmes un precio", "alerta"),
+    "content_brain_bloqueado": ("Contenido bloqueado por guarda de presupuesto", "alerta"),
+    "content_brain_api": ("Pensó una pieza de contenido nueva", "exito"),
+    "content_brain_plan_api": ("Planificó el contenido del día", "exito"),
+    "ig_publish": ("Publicó en Instagram", "exito"),
+    "chat_panel": ("Respondiste una pregunta tuya", "exito"),
+    "error_api": ("Error llamando a la IA", "fallo"),
+    "content_brain_error": ("Error generando contenido", "fallo"),
+    "ig_publish_error": ("Error publicando en Instagram", "fallo"),
+}
+HERRAMIENTAS_FALLO = {k for k, (_, tipo) in HERRAMIENTA_ETIQUETA.items() if tipo == "fallo"}
+
+
 # Columnas agregadas después de la primera versión de la tabla. Se añaden con ALTER TABLE
 # para no tocar los datos que ya están en data/el_socio.db.
 _MIGRACIONES = {
@@ -148,6 +173,21 @@ def list_all_known_emails() -> set[str]:
     with _conn() as conn:
         rows = conn.execute("SELECT email FROM leads").fetchall()
         return {r["email"].lower() for r in rows if r["email"]}
+
+
+def count_leads_en_cola() -> int:
+    """Personas en cola sin contactar. Sirve para mantener colchón: si el reponedor
+    solo cubre el día, la cola amanece siempre en cero y el motor se queda sin a quién
+    escribirle justo cuando el buscador tarda media hora en traer gente nueva."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM leads WHERE stage='nuevo_lead' AND COALESCE(bounced, 0)=0 "
+            "AND email IS NOT NULL AND TRIM(email)!='' "
+            "AND LOWER(TRIM(email)) NOT IN ("
+            "    SELECT LOWER(TRIM(recipient)) FROM outbox WHERE status IN ('pending', 'sent')"
+            ")"
+        ).fetchone()
+        return int(row[0] if row else 0)
 
 
 def upsert_lead(
@@ -544,7 +584,17 @@ def log_agent_action(
              tokens_entrada, tokens_salida, tokens_cache_creacion, tokens_cache_lectura,
              float(costo_usd), bloqueado_por_guarda),
         )
-        return int(cur.lastrowid)
+        fila_id = int(cur.lastrowid)
+    if bloqueado_por_guarda or herramienta in HERRAMIENTAS_FALLO:
+        try:
+            import notificar  # import perezoso: notificar.py hace red, database.py no debe depender de eso siempre
+
+            etiqueta, _ = HERRAMIENTA_ETIQUETA.get(herramienta, (herramienta, "fallo"))
+            detalle = bloqueado_por_guarda or resultado or etiqueta
+            notificar.notificar_fallo(f"{etiqueta}: {detalle}"[:220])
+        except Exception:
+            pass  # una notificación caída nunca debe tumbar el flujo real del agente
+    return fila_id
 
 
 def agent_cost_today_usd() -> float:
@@ -925,4 +975,67 @@ def list_recent_market_signals(limit: int = 12) -> dict[str, list[str]]:
                 for r in replies if r["snippet"]
             ],
         }
+
+
+# ------------------------------------------------------- monitor móvil (panel_api.py)
+
+ETAPAS_CORREO_ACTIVO = ("contactado", "conversando", "esperando_precio_dueno", "interesado_cita")
+
+
+def count_correos_activos() -> int:
+    """Leads con una conversación de correo en curso (ni fríos, ni cerrados)."""
+    with _conn() as conn:
+        signos = ",".join("?" * len(ETAPAS_CORREO_ACTIVO))
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM leads WHERE stage IN ({signos})", ETAPAS_CORREO_ACTIVO
+        ).fetchone()
+        return int(row["n"])
+
+
+def count_leads_creados_hoy() -> int:
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM leads WHERE created_at LIKE ?", (f"{today}%",)
+        ).fetchone()
+        return int(row["n"])
+
+
+def count_seguimientos_pendientes() -> int:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM agent_followups WHERE estado='pendiente'"
+        ).fetchone()
+        return int(row["n"])
+
+
+def _leads_pausados() -> set[int]:
+    import json
+
+    raw = get_settings().get("leads_pausados", "[]")
+    try:
+        return {int(x) for x in json.loads(raw)}
+    except Exception:
+        return set()
+
+
+def is_lead_pausado(lead_id: int) -> bool:
+    return int(lead_id) in _leads_pausados()
+
+
+def set_lead_pausado(lead_id: int, pausado: bool) -> None:
+    """Pausa real: cancela los seguimientos programados y queda marcado en `settings`.
+
+    No detiene un envío ya encolado en `outbox` (eso lo decide Raymond desde el panel de
+    contenido/correos); detiene SOLO los recontactos automáticos futuros de este lead.
+    """
+    import json
+
+    actuales = _leads_pausados()
+    if pausado:
+        actuales.add(int(lead_id))
+        cancel_followups_for_lead(int(lead_id))
+    else:
+        actuales.discard(int(lead_id))
+    update_settings({"leads_pausados": json.dumps(sorted(actuales))})
 

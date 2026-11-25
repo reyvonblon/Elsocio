@@ -5,19 +5,26 @@
 - Correo: 15/día máx, 1 cada 15-16 min, ventana 8-21 hora local. Guardas de precios/cifras en código.
 - Reels: 3 formatos rotan (`ReelAuto.tsx`), voz Giuseppe Multilingual fija, -14 LUFS. Carrusel vía `CarruselLaminas.tsx`.
 - IG: solo Meta Graph API, token auto-renovado. Cuenta real `@elsociotuia` id `17841438802416058`.
-- 257 pruebas en verde.
-## Lo que se arregló el 2026-11-25
-- IG publicaba contra la cuenta vieja restringida: `.env` tenía el `IG_USER_ID` de `inmocolombia` y el código solo usaba el de la BD si `.env` estaba vacío. Corregido → 6 piezas reales publicadas hoy.
-- Rebotes diferidos: llegan del `mailer-daemon`, no eran lead y se descartaban en silencio; `hola@hades.com` llevaba 2 días rechazando y seguía recibiendo. Ya se detectan y cortan.
-- Correo sin ancho máximo (se estiraba en pantalla ancha) → 600px. `From` ahora lleva nombre. Logo con `EMAIL_LOGO=1`, apagado en frío (imagen de marca = pestaña Promociones).
-- Basura filtrada: portales de empleo (`magnetoempleos.com`) y nombres de empresa que eran consultas de Google.
-- El buscador premiaba los buzones genéricos con +30 y una persona real competía con 0: 18 de 26 correos fueron a `info@`/`contacto@` y solo 2 a alguien con nombre. Invertido: persona +60/+35, buzón de empresa +10 (se aceptan de últimas, muchas PyMEs solo tienen ese). El saludo por nombre ahora usa el mismo criterio en buscador y redactor.
-- Plan diario de contenido se cortaba en `stop=max_tokens` (4400 justos): 0.1111 USD pagados por una respuesta inservible + reintento. Tope a 8000 (un tope alto no cuesta más, solo se paga lo escrito).
-- Presupuesto repartido con datos reales (ventas ~0.032/correo, contenido ~0.045/llamada): reserva ventas `0.41`, contenido `0.09`, y colchón `CONTENT_COLCHON_PIEZAS=6` — si ya hay 6 piezas listas sin publicar no se gasta en pensar más. Publicación bajada a 3/día: la cola dura el doble.
-- Leads: se descartaron 116 buzones de empresa sin contactar. Quedan **10** con persona real. El buscador NO usa IA (es scraping puro): descubrir y analizar prospectos cuesta 0 USD.
-- Filtro de persona reforzado: palabras de negocio (`lmvjewelry@`, `batutadiseno@`), sufijos societarios (`renovaplus.sas@`), genéricos en inglés (`hello@`, `contact@`) y lista de nombres de pila colombianos (`yesidcan@` → saluda "Yesid").
+- 262 pruebas en verde.
+## Lo que se arregló el 2026-11-25 (resumen)
+- IG publicaba contra la cuenta vieja restringida (`IG_USER_ID` de `inmocolombia` en `.env`). Corregido.
+- Rebotes diferidos del `mailer-daemon` ya se detectan y cortan. Correo a 600px y `From` con nombre.
+- El buscador premiaba los buzones genéricos: invertido a persona +60/+35, buzón +10.
+- Presupuesto repartido (ventas 0.41 / contenido 0.09, colchón 6 piezas). IG a 3 piezas/día.
+
+## Lo que se arregló el 2026-11-26 (prospectos)
+- `prospect_hunter.py` corrido a mano NO guardaba nada: imprimía 45 prospectos reales y los tiraba. Nuevo `--guardar`.
+- Filtro duro: si un sitio no publica a una persona, se descarta el sitio. Antes el buzón de empresa se aceptaba "de últimas" y por eso seguían entrando `info@`, `hola@`, `ventas@`.
+- Bug que botaba gente real: un correo que termina en números (`camilacarmona27@`) se partía con un espacio al final y fallaba `.isalpha()`.
+- Escapes JSON del HTML: entraba `u003einfo@megapredios.com.co` como si fuera persona.
+- Saludo más seguro: si el nombre es dudoso (`fpedraza`, `luisalfesp` = Luis o Luisa) saluda a la empresa, no inventa.
+- Marcas que pasaban como persona: `cafealtoperfil`, `acuattro`, `taro`, `ccialviva`, `weare.cuero`, `papeleria.pdepapel`. Ahora fuera.
+- Consultas de búsqueda ampliadas de 48 a 104 (Bucaramanga, Pereira, Cartagena, Manizales + verticales nuevos: ropa infantil/deportiva, cocinas, stands, fotografía de producto, eventos, mascotas).
+- El reponedor solo buscaba para el día: la cola amanecía en cero y el buscador tarda ~30 min. Ahora apunta a un colchón (`autopilot_buffer_leads=45`).
+- Cola: **33 personas reales** (antes 10). 17 buzones/marcas descartados sin contactar. 262 pruebas en verde.
+
 ## En prueba / Pendiente
-- Cola: 6 piezas generadas listas (sin el carrusel que sale hoy). Mañana el motor reparte 6 a lo largo del día.
+- Cola de correo: 33 personas (2 días a 15/día). Rendimiento real del buscador: ~28 personas por 104 consultas (~50 min, 0 USD). Los sitios colombianos publican `info@`, no gente: ese es el techo.
 - Sin respuestas de prospectos todavía: 26 correos enviados, 0 interesados. Falta la 1ª venta.
 - Riesgo abierto: vaciar la cola de golpe en una cuenta de 1 seguidor es el patrón que ya hizo que Meta restringiera la cuenta anterior.
 - Las 6 piezas del 25-nov SÍ se publicaron (`quota_usage: 5` en Meta); Raymond las archivó a mano, por eso `/media` sale vacío. Ojo: archivar deja el contenido invisible y sin métricas para `sincronizar_resultados_ig`.

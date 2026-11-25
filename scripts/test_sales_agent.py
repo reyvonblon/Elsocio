@@ -1699,5 +1699,86 @@ class TestHumanizacionYAnalisisProspecto(BaseConBDTemporal):
         self.assertEqual(api.call_count, 0)
 
 
+class TestSoloLePidoPersonasReales(unittest.TestCase):
+    """El error que nos costó los primeros 26 correos: 18 fueron a buzones de empresa
+    (info@, ventas@, hola@) y respondieron 0. Un buzón lo lee una recepcionista o nadie."""
+
+    def test_buzon_de_empresa_y_marca_no_pasan_como_persona(self) -> None:
+        import prospect_hunter  # noqa: PLC0415
+
+        for correo in (
+            "info@empresa.com", "ventas@kiel.com.co", "hola@agencia.com",
+            "cafealtoperfil@gmail.com", "acuattro@gmail.com", "taro@tatoestudio.com",
+            "ccialviva@ccviva.com", "integraespacioscali@gmail.com",
+            "weare.cuero@gmail.com", "papeleria.pdepapel@gmail.com",
+            "lmvjewelry@joyas.com", "creaciones.scsas@gmail.com",
+        ):
+            local, dom = correo.split("@", 1)
+            with self.subTest(correo=correo):
+                self.assertFalse(
+                    prospect_hunter._parece_correo_de_persona(local, dom),
+                    f"{correo} pasó como persona y es un buzón o la marca",
+                )
+
+    def test_personas_reales_si_pasan_y_se_saludan_por_su_nombre(self) -> None:
+        import prospect_hunter  # noqa: PLC0415
+
+        esperado = {
+            "santiago.salazar@estudio.com": "Santiago",
+            "mariana@tienda.com": "Mariana",
+            "yesidcan@gmail.com": "Yesid",
+            # El bug del strip: "camilacarmona27" quedaba con un espacio al final,
+            # fallaba .isalpha() y una persona real se iba a la basura.
+            "camilacarmona27@gmail.com": "Camila",
+            "alejandra.r@empresa.com.co": "Alejandra",
+            "etc.erikatarazona@gmail.com": "Erika",
+        }
+        for correo, nombre in esperado.items():
+            local, dom = correo.split("@", 1)
+            with self.subTest(correo=correo):
+                self.assertTrue(prospect_hunter._parece_correo_de_persona(local, dom))
+                self.assertEqual(prospect_hunter.nombre_de_pila_desde_email(correo), nombre)
+
+    def test_si_el_nombre_es_dudoso_saluda_a_la_empresa(self) -> None:
+        import prospect_hunter  # noqa: PLC0415
+
+        # "Hola Fpedraza" o saludar Luisa a un Luis quema el correo en la primera línea.
+        for correo in ("fpedraza.acc@gmail.com", "luisalfesp@gmail.com", "j.perez@x.com"):
+            with self.subTest(correo=correo):
+                self.assertEqual(prospect_hunter.nombre_de_pila_desde_email(correo), "")
+
+    def test_escapes_json_no_ensucian_el_correo(self) -> None:
+        import prospect_hunter  # noqa: PLC0415
+
+        # Sin limpiar \u003e el correo salía como "u003einfo@megapredios.com.co".
+        cands = prospect_hunter._clean_email_candidates(
+            "escribenos \\u003einfo@megapredios.com.co\\u003c", "megapredios.com.co",
+        )
+        self.assertNotIn("u003einfo@megapredios.com.co", cands)
+
+
+class TestColchonDeLaCola(BaseConBDTemporal):
+    """El reponedor solo cubría el día: la cola amanecía en cero y el buscador tarda
+    ~30 min en traer gente real, así que el motor se quedaba sin a quién escribirle."""
+
+    def test_busca_hasta_llenar_el_colchon_no_solo_el_dia(self) -> None:
+        database.update_settings({"autopilot_buffer_leads": "45"})
+        llamadas: list[int] = []
+
+        def falso_descubrir(needed: int, **_kw: object) -> list[dict[str, str]]:
+            llamadas.append(needed)
+            return []
+
+        import prospect_hunter  # noqa: PLC0415
+
+        with mock.patch.object(prospect_hunter, "discover_new_prospects", falso_descubrir), \
+             mock.patch.object(autopilot_dispatcher, "get_daily_limit", return_value=15):
+            res = autopilot_dispatcher.ensure_daily_pipeline(force=True)
+
+        self.assertTrue(llamadas, "no buscó prospectos")
+        self.assertGreaterEqual(llamadas[0], 45, "siguió buscando solo para el día")
+        self.assertEqual(res["colchon_objetivo"], 45)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
