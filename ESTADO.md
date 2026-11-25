@@ -12,12 +12,12 @@
   dos renders a la vez ya no pueden chocar en `out/frames` y arruinarse mutuamente (2026-11-25).
 - Motor (`com.elsocio.cerebro`, launchd cada 15 min) confirmado activo y corriendo solo.
 ## En prueba / Pendiente
-- DESBLOQUEADO Meta (2026-11-25): el fallo NO era permiso de Meta. `.env` tenia `IG_USER_ID` de la
-  cuenta vieja restringida (`inmocolombia`) y `ig_publisher` solo usa el id de la BD cuando `.env` esta
-  vacio, asi que publicaba contra la cuenta mala. Corregido a `17841438802416058` (`@elsociotuia`).
-  Permisos reales: `instagram_content_publish` granted, cuota 100/dia. Primer post REAL publicado:
-  https://www.instagram.com/p/DgLMj9YFpf4/ (pieza 4). Motor sigue solo: 1 pieza cada 75 min, 6/dia.
-- Primer carrusel REAL: pieza 9 ya generada y en cola; sale sola hoy dentro del cupo.
+- Meta DESBLOQUEADO (2026-11-25): el bloqueo era `IG_USER_ID` viejo en `.env` (cuenta restringida),
+  no permisos. Ahora `17841438802416058` (`@elsociotuia`), `instagram_content_publish` OK, 100/dia.
+- Publicado REAL: post https://www.instagram.com/p/DgLMj9YFpf4/ y primer REEL
+  https://www.instagram.com/reel/DgLOh_ziseu/ (pieza 1 forzada a mano: el video nunca fue el problema).
+- Hoy 2/6. Faltan 4 (video 2, historias 3 y 6, carrusel 9): salen solas cada 75 min, sin gastar IA.
+  No forzarlas de golpe (rafaga = menos alcance).
 - Saldo IA de hoy agotado (0.5017/0.50 USD): no se crean piezas nuevas hasta manana; las 11 ya
   generadas alcanzan para hoy y manana.
 ## Descartado
