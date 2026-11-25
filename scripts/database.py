@@ -19,12 +19,14 @@ CREATE TABLE IF NOT EXISTS leads (
     stage TEXT DEFAULT 'nuevo_lead',
     notes TEXT, recontact_count INTEGER DEFAULT 0,
     bounced INTEGER DEFAULT 0,
+    website TEXT DEFAULT '',
+    dossier TEXT DEFAULT '',
     created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS outbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     recipient TEXT, subject TEXT, body TEXT, channel TEXT DEFAULT 'email',
-    nicho TEXT, scheduled_for TEXT, status TEXT DEFAULT 'pending',
+    nicho TEXT, estilo TEXT DEFAULT '', scheduled_for TEXT, status TEXT DEFAULT 'pending',
     error TEXT, created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS settings (
@@ -80,6 +82,13 @@ def _now() -> str:
 # Columnas agregadas después de la primera versión de la tabla. Se añaden con ALTER TABLE
 # para no tocar los datos que ya están en data/el_socio.db.
 _MIGRACIONES = {
+    "leads": [
+        ("website", "TEXT DEFAULT ''"),
+        ("dossier", "TEXT DEFAULT ''"),
+    ],
+    "outbox": [
+        ("estilo", "TEXT DEFAULT ''"),
+    ],
     "agent_log": [
         ("tokens_cache_creacion", "INTEGER DEFAULT 0"),
         ("tokens_cache_lectura", "INTEGER DEFAULT 0"),
@@ -88,6 +97,7 @@ _MIGRACIONES = {
     "content_queue": [
         ("ig_media_id", "TEXT DEFAULT ''"),
         ("error_ig", "TEXT DEFAULT ''"),
+        ("hashtags_ig", "TEXT DEFAULT ''"),
     ],
 }
 
@@ -143,7 +153,7 @@ def list_all_known_emails() -> set[str]:
 def upsert_lead(
     *, name: str, company: str, email: str, whatsapp: str = "", nicho: str = "",
     service_interest: str = "", source: str = "", stage: str = "nuevo_lead",
-    notes: str = "",
+    notes: str = "", website: str = "", dossier: str = "",
 ) -> int:
     email = email.lower().strip()
     now = _now()
@@ -153,10 +163,50 @@ def upsert_lead(
             return int(existing["id"])
         cur = conn.execute(
             "INSERT INTO leads (name, company, email, whatsapp, nicho, service_interest, "
-            "source, stage, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (name, company, email, whatsapp, nicho, service_interest, source, stage, notes, now, now),
+            "source, stage, notes, website, dossier, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (name, company, email, whatsapp, nicho, service_interest, source, stage,
+             notes, website, dossier, now, now),
         )
         return int(cur.lastrowid)
+
+
+def update_lead_enrichment(
+    lead_id: int,
+    *,
+    company: str | None = None,
+    name: str | None = None,
+    whatsapp: str | None = None,
+    website: str | None = None,
+    dossier: str | None = None,
+) -> dict | None:
+    """Guarda perfil/dossier analizado de un lead sin sobrescribir etapa ni notas."""
+    campos: list[str] = []
+    valores: list[object] = []
+    if company is not None and company.strip():
+        campos.append("company=?")
+        valores.append(company.strip())
+    if name is not None and name.strip():
+        campos.append("name=?")
+        valores.append(name.strip())
+    if whatsapp is not None and whatsapp.strip():
+        campos.append("whatsapp=?")
+        valores.append(whatsapp.strip())
+    if website is not None:
+        campos.append("website=?")
+        valores.append(website.strip()[:400])
+    if dossier is not None:
+        campos.append("dossier=?")
+        valores.append(dossier.strip()[:2500])
+    if not campos:
+        return get_lead_by_id(lead_id)
+    campos.append("updated_at=?")
+    valores.append(_now())
+    valores.append(int(lead_id))
+    with _conn() as conn:
+        conn.execute(f"UPDATE leads SET {', '.join(campos)} WHERE id=?", valores)
+        row = conn.execute("SELECT * FROM leads WHERE id=?", (int(lead_id),)).fetchone()
+        return dict(row) if row else None
 
 
 def get_lead_by_email(email: str) -> dict | None:
@@ -240,17 +290,120 @@ def mark_lead_bounced(email: str, reason: str = "") -> None:
         )
 
 
-def enqueue_email(*, recipient: str, subject: str, body: str, nicho: str = "", scheduled_for: str | None = None) -> int:
+def enqueue_email(
+    *, recipient: str, subject: str, body: str, nicho: str = "",
+    estilo: str = "", scheduled_for: str | None = None,
+) -> int:
     # Normalizado siempre: si no, already_emailed_today y cancel_pending_outbox_for_recipient
     # (que comparan en minúsculas) no encuentran la fila.
     recipient = recipient.lower().strip()
+    estilo_limpio = (estilo or "").strip()[:60]
     with _conn() as conn:
         cur = conn.execute(
-            "INSERT INTO outbox (recipient, subject, body, channel, nicho, scheduled_for, status, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (recipient, subject, body, "email", nicho, scheduled_for or _now(), "pending", _now()),
+            "INSERT INTO outbox (recipient, subject, body, channel, nicho, estilo, scheduled_for, status, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (recipient, subject, body, "email", nicho, estilo_limpio, scheduled_for or _now(), "pending", _now()),
         )
         return int(cur.lastrowid)
+
+
+def get_last_sent_style_for_recipient(recipient: str) -> str:
+    """Devuelve el último `estilo` realmente enviado o encolado a este correo."""
+    if not DB_PATH.exists():
+        return ""
+    try:
+        with _conn() as conn:
+            row = conn.execute(
+                "SELECT estilo FROM outbox WHERE LOWER(TRIM(recipient))=? "
+                "AND status IN ('sent', 'pending') AND COALESCE(TRIM(estilo), '')!='' "
+                "ORDER BY id DESC LIMIT 1",
+                ((recipient or "").lower().strip(),),
+            ).fetchone()
+            return str(row["estilo"] or "").strip() if row else ""
+    except sqlite3.OperationalError:
+        return ""
+
+
+def get_last_used_email_style(nicho: str = "") -> str:
+    """Último modelo de correo usado en frío (para no repetir siempre el mismo seguido)."""
+    if not DB_PATH.exists():
+        return ""
+    try:
+        with _conn() as conn:
+            if (nicho or "").strip():
+                row = conn.execute(
+                    "SELECT estilo FROM outbox WHERE nicho=? AND status IN ('sent', 'pending') "
+                    "AND COALESCE(TRIM(estilo), '')!='' ORDER BY id DESC LIMIT 1",
+                    (nicho.strip(),),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT estilo FROM outbox WHERE status IN ('sent', 'pending') "
+                    "AND COALESCE(TRIM(estilo), '')!='' ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+            return str(row["estilo"] or "").strip() if row else ""
+    except sqlite3.OperationalError:
+        return ""
+
+
+def summarize_email_style_performance(nicho: str = "") -> dict[str, dict[str, int]]:
+    """Métricas reales por modelo de correo (enviados, positivos, respuestas y bajas/negativos).
+
+    Se alimenta únicamente de correos reales en `outbox` y respuestas reales en
+    `processed_replies` / `leads`. Nunca inventa cifras.
+    """
+    if not DB_PATH.exists():
+        return {}
+    try:
+        with _conn() as conn:
+            params: tuple[object, ...] = ()
+            filtro_nicho = ""
+            if (nicho or "").strip():
+                filtro_nicho = " AND nicho=?"
+                params = (nicho.strip(),)
+            rows = conn.execute(
+                "SELECT LOWER(TRIM(recipient)) AS email, TRIM(estilo) AS estilo "
+                "FROM outbox WHERE status IN ('sent', 'pending') "
+                "AND COALESCE(TRIM(estilo), '')!=''" + filtro_nicho + " ORDER BY id ASC",
+                params,
+            ).fetchall()
+            if not rows:
+                return {}
+
+            # Mapeo real de respuestas recibidas y etapas de leads.
+            reply_intents: dict[str, set[str]] = {}
+            for r in conn.execute(
+                "SELECT LOWER(TRIM(sender_email)) AS em, intent FROM processed_replies "
+                "WHERE sender_email IS NOT NULL"
+            ).fetchall():
+                reply_intents.setdefault(str(r["em"]), set()).add(str(r["intent"] or ""))
+
+            lead_stages: dict[str, str] = {}
+            for r in conn.execute("SELECT LOWER(TRIM(email)) AS em, stage FROM leads WHERE email IS NOT NULL").fetchall():
+                lead_stages[str(r["em"])] = str(r["stage"] or "")
+
+            stats: dict[str, dict[str, int]] = {}
+            vistos_par: set[tuple[str, str]] = set()
+            for r in rows:
+                est = str(r["estilo"])
+                em = str(r["email"])
+                if not est or not em or (est, em) in vistos_par:
+                    continue
+                vistos_par.add((est, em))
+                bucket = stats.setdefault(est, {"enviados": 0, "positivos": 0, "respuestas": 0, "negativos": 0})
+                bucket["enviados"] += 1
+                intents = reply_intents.get(em, set())
+                stage = lead_stages.get(em, "")
+                if "interesado_cita" in intents or stage in ("interesado_cita", "calificado", "esperando_precio_dueno"):
+                    bucket["positivos"] += 1
+                    bucket["respuestas"] += 1
+                elif "respuesta_recibida" in intents or stage == "conversando":
+                    bucket["respuestas"] += 1
+                if "baja" in intents or "no_interesado" in intents or stage in ("baja", "no_interesado"):
+                    bucket["negativos"] += 1
+            return stats
+    except sqlite3.OperationalError:
+        return {}
 
 
 def cancel_pending_outbox_for_recipient(email: str) -> None:
@@ -405,6 +558,28 @@ def agent_cost_today_usd() -> float:
         return float(row["usd"])
 
 
+def agent_log_count_today(herramienta: str) -> int:
+    """Cuántas veces se registró esta `herramienta` hoy (p.ej. tope de preguntas del chat)."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM agent_log WHERE herramienta=? AND fecha LIKE ?",
+            (herramienta, f"{today}%"),
+        ).fetchone()
+        return int(row["n"])
+
+
+def recent_agent_log(limit: int = 20) -> list[dict]:
+    """Últimas acciones reales del sistema (para pintar 'qué está haciendo' en el panel)."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT fecha, herramienta, resultado, costo_usd, bloqueado_por_guarda "
+            "FROM agent_log ORDER BY id DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def agent_tokens_today() -> dict[str, int]:
     today = datetime.now().strftime("%Y-%m-%d")
     with _conn() as conn:
@@ -438,6 +613,18 @@ def already_emailed_today(recipient: str) -> bool:
             (recipient.lower().strip(), f"{today}%"),
         ).fetchone()
         return row is not None
+
+
+def list_recent_subjects_today(limit: int = 30) -> list[str]:
+    """Asuntos ya usados hoy en `outbox`, para evitar correos con plantilla idéntica."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT subject FROM outbox WHERE status IN ('pending','sent') "
+            "AND created_at LIKE ? ORDER BY id DESC LIMIT ?",
+            (f"{today}%", max(1, int(limit))),
+        ).fetchall()
+        return [str(r["subject"] or "").strip() for r in rows if r["subject"]]
 
 
 def schedule_followup(lead_id: int, dias: int, motivo: str) -> int | None:
@@ -519,7 +706,7 @@ def summarize_silent_sent_batches(*, dias: int = 7) -> list[dict]:
 
 # Un estado por etapa real de la pieza. `descartado` y `publicado` son finales.
 CONTENT_ESTADOS = ("borrador", "aprobado", "generado", "publicado", "descartado")
-CONTENT_TIPOS = ("post", "video")
+CONTENT_TIPOS = ("post", "video", "historia", "carrusel")
 
 
 def enqueue_content(
@@ -567,6 +754,7 @@ def list_content(*, estado: str = "", limit: int = 100) -> list[dict]:
 def update_content(
     content_id: int, *, estado: str | None = None, archivo: str | None = None,
     nota: str | None = None, ig_media_id: str | None = None, error_ig: str | None = None,
+    hashtags_ig: str | None = None,
 ) -> dict | None:
     """Cambia estado/archivo/nota/ig de una pieza. `publicado` sella `published_at`."""
     if estado is not None and estado not in CONTENT_ESTADOS:
@@ -590,6 +778,9 @@ def update_content(
     if error_ig is not None:
         campos.append("error_ig=?")
         valores.append(error_ig[:500])
+    if hashtags_ig is not None:
+        campos.append("hashtags_ig=?")
+        valores.append(hashtags_ig[:500])
     if not campos:
         return get_content(content_id)
     campos.append("updated_at=?")
@@ -619,6 +810,35 @@ def content_created_today() -> int:
         return int(row["n"])
 
 
+def content_created_today_by_tipo() -> dict[str, int]:
+    """Desglose por tipo (`video`, `post`, `historia`, `carrusel`) de piezas activas creadas hoy."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    conteo = {t: 0 for t in CONTENT_TIPOS}
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT tipo, COUNT(*) AS n FROM content_queue "
+            "WHERE estado!='descartado' AND created_at LIKE ? GROUP BY tipo",
+            (f"{today}%",),
+        ).fetchall()
+        for r in rows:
+            t = str(r["tipo"] or "").strip().lower()
+            if t in conteo:
+                conteo[t] = int(r["n"])
+    return conteo
+
+
+def agent_content_cost_today_usd() -> float:
+    """Lo que `content_brain` ha gastado hoy dentro del presupuesto compartido."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(costo_usd),0) AS usd FROM agent_log "
+            "WHERE herramienta LIKE 'content_brain%' AND fecha LIKE ?",
+            (f"{today}%",),
+        ).fetchone()
+        return float(row["usd"])
+
+
 def ig_published_today() -> int:
     """Piezas realmente publicadas hoy en Instagram (tope diario duro de publicación)."""
     today = datetime.now().strftime("%Y-%m-%d")
@@ -630,6 +850,39 @@ def ig_published_today() -> int:
         return int(row["n"])
 
 
+def ig_published_today_by_tipo() -> dict[str, int]:
+    """Desglose por tipo (`video`, `post`, `historia`, `carrusel`) publicado hoy en Instagram."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    conteo = {t: 0 for t in CONTENT_TIPOS}
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT tipo, COUNT(*) AS n FROM content_queue "
+            "WHERE estado='publicado' AND published_at LIKE ? GROUP BY tipo",
+            (f"{today}%",),
+        ).fetchall()
+        for r in rows:
+            t = str(r["tipo"] or "").strip().lower()
+            if t in conteo:
+                conteo[t] = int(r["n"])
+    return conteo
+
+
+def last_ig_published_datetime() -> datetime | None:
+    """Fecha/hora de la última publicación real en Instagram."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT published_at FROM content_queue WHERE estado='publicado' "
+            "AND published_at IS NOT NULL AND TRIM(published_at)!='' "
+            "ORDER BY published_at DESC, id DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            return datetime.strptime(str(row["published_at"]), "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+
+
 def list_recent_hooks(limit: int = 40) -> list[str]:
     """Últimos ganchos encolados, para que el cerebro de contenido nunca se repita."""
     with _conn() as conn:
@@ -638,6 +891,18 @@ def list_recent_hooks(limit: int = 40) -> list[str]:
             (max(1, int(limit)),),
         ).fetchall()
         return [str(r["gancho"]).strip() for r in rows if r["gancho"]]
+
+
+def list_recent_video_nichos(dias: int = 20) -> set[str]:
+    """Nichos de REEL (video) ya usados en los últimos `dias` días: prohibido repetir tema."""
+    corte = (datetime.now() - timedelta(days=max(1, dias))).strftime("%Y-%m-%d %H:%M:%S")
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT nicho FROM content_queue WHERE tipo='video' AND created_at >= ? "
+            "AND estado != 'descartado'",
+            (corte,),
+        ).fetchall()
+        return {str(r["nicho"]).strip().lower() for r in rows if r["nicho"]}
 
 
 def list_recent_market_signals(limit: int = 12) -> dict[str, list[str]]:

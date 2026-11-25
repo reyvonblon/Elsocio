@@ -278,15 +278,19 @@ def revisar_guarda_precios(*partes: str) -> list[str]:
     return motivos
 
 
-# ------------------------------------------------------------------ línea de baja
+# ------------------------------------------------------------------ línea de baja y calidad humana
 
 _SENALES_BAJA = (
     "darte de baja", "dar de baja", "darse de baja", "no recibir mas", "no quieres recibir",
-    "no deseas recibir", "responde baja", "responde con baja", "desuscribir", "no te escribo mas",
-    "no volver a escribir", "escribe baja",
+    "no quieren recibir", "no deseas recibir", "no desean recibir", "prefieres no recibir",
+    "prefieren no recibir", "no te interesa recibir", "no les interesa recibir",
+    "responde baja", "responde \"baja\"", "responde 'baja'", "responde con baja",
+    "respondan baja", "respondan \"baja\"", "respondan 'baja'", "respondeme baja",
+    "respondeme con la palabra baja", "desuscribir", "no te escribo mas",
+    "no te escribo de nuevo", "no te vuelvo a escribir", "no les vuelvo a escribir",
+    "no volver a escribir", "escribe baja", "saco de la lista",
 )
-LINEA_BAJA = ("\n\nSi no quieres recibir más correos míos, respóndeme con la palabra BAJA "
-              "y no te vuelvo a escribir.")
+LINEA_BAJA = "\n\nSi no te interesa, respóndeme BAJA y no te vuelvo a escribir."
 
 
 def tiene_linea_de_baja(cuerpo: str) -> bool:
@@ -296,6 +300,256 @@ def tiene_linea_de_baja(cuerpo: str) -> bool:
 
 def asegurar_linea_de_baja(cuerpo: str) -> str:
     return cuerpo if tiene_linea_de_baja(cuerpo) else cuerpo.rstrip() + LINEA_BAJA
+
+
+def normalizar_cuerpo_correo(cuerpo: str, *, es_frio: bool) -> str:
+    """Limpia espacios excesivos, quita firmas redundantes y deja a lo sumo una línea de baja."""
+    cuerpo_limpio, linea_baja = autopilot_dispatcher.limpiar_cuerpo_correo(cuerpo)
+    base = cuerpo_limpio or (cuerpo or "").strip()
+    if es_frio:
+        if linea_baja:
+            return f"{base}\n\n{linea_baja}"
+        return asegurar_linea_de_baja(base)
+    return base
+
+
+_CLICHES_IA: tuple[tuple[str, str], ...] = (
+    ("cliche_ia", "en el mundo actual"),
+    ("cliche_ia", "en la era digital"),
+    ("cliche_ia", "solucion integral"),
+    ("cliche_ia", "lleva tu negocio al siguiente nivel"),
+    ("cliche_ia", "transforma tu negocio"),
+    ("cliche_ia", "no te quedes atras"),
+    ("cliche_ia", "estimado cliente"),
+    ("cliche_ia", "espero que este correo te encuentre bien"),
+    ("cliche_ia", "espero te encuentres muy bien"),
+    ("cliche_ia", "sin mas preambulos"),
+    ("cliche_ia", "quedo a su entera disposicion"),
+    ("cliche_ia", "saludos cordiales"),
+    ("cliche_ia", "me permito escribir"),
+    ("apertura_robotica", "hola, equipo de"),
+    ("apertura_robotica", "una pregunta directa:"),
+    ("apertura_robotica", "les escribo porque algo que veo mucho"),
+    ("copia_nicho", "seguro contra errores de produccion"),
+    ("copia_nicho", "cuello de botella operativo o visual"),
+    ("copia_nicho", "soluciones a la medida con ia"),
+)
+_RE_VINETAS = re.compile(r"(?m)^\s*(?:[-•*]|\d+\.)\s+\S")
+_RE_EMOJIS_SPAM = re.compile(r"[🚀🔥✨💡🎯⚡🌟🎉💥📈]")
+MAX_PALABRAS_CORREO_FRIO = 130
+
+
+def revisar_calidad_humana(
+    asunto: str,
+    cuerpo: str,
+    *,
+    es_frio: bool,
+    asuntos_recientes: list[str] | None = None,
+) -> list[str]:
+    """Guarda en código contra correos robóticos, largos, con viñetas o plantillas repetidas."""
+    if not es_frio:
+        return []
+    motivos: list[str] = []
+    cuerpo_sin_baja, _ = autopilot_dispatcher.limpiar_cuerpo_correo(cuerpo)
+    texto_eval = cuerpo_sin_baja or cuerpo
+    plano_total = _plano(f"{asunto}\n{texto_eval}")
+
+    for tipo, frase in _CLICHES_IA:
+        if frase in plano_total:
+            motivos.append(f"{tipo}: '{frase}'")
+
+    if _RE_VINETAS.search(texto_eval):
+        motivos.append("vinetas_en_correo_frio: evita listas con viñetas en primer contacto")
+
+    if _RE_EMOJIS_SPAM.search(f"{asunto} {texto_eval}"):
+        motivos.append("emojis_decorativos: quita emojis de marketing")
+
+    if (asunto + " " + texto_eval).count("!") > 0:
+        motivos.append("exceso_exclamaciones: usa 0 signos de exclamación en correos fríos (ADN Raymond)")
+
+    if texto_eval.count("—") > 1:
+        motivos.append("exceso_guiones_largos: evita guiones largos decorativos (—)")
+
+    palabras = re.findall(r"\S+", texto_eval)
+    if len(palabras) > MAX_PALABRAS_CORREO_FRIO:
+        motivos.append(f"muy_largo: {len(palabras)} palabras (máximo {MAX_PALABRAS_CORREO_FRIO})")
+
+    asunto_norm = _plano(asunto).strip()
+    if len(asunto_norm) >= 12 and asuntos_recientes:
+        recientes_norm = {_plano(a).strip() for a in asuntos_recientes if a}
+        if asunto_norm in recientes_norm:
+            motivos.append("asunto_repetido_hoy: crea un asunto único para este negocio")
+
+    return motivos
+
+
+# ------------------------------------------------------------------ modelos de correo y aprendizaje
+
+# 4 modelos sobrios, 100% dentro de la voz real de Raymond en El Socio (asuntos cortos 1-4 palabras,
+# 0 exclamaciones, saludo natural "Buen día, señores [Marca]" o "Hola [Nombre]" y cierre "Quedo atento, muchas gracias.").
+MODELOS_CORREO: tuple[dict[str, str], ...] = (
+    {
+        "id": "muestra_directa",
+        "nombre": "Muestra o ejemplo primero",
+        "guia": (
+            "Asunto de 1-4 palabras. Saludo natural ('Buen día, señores [Marca],' o 'Hola [Nombre],'). "
+            "Abre mencionando 1 detalle real del dossier ('Pasé por su perfil y vi...'). En una frase corta explica qué "
+            "haces en El Socio para un negocio como el suyo. Cierra ofreciendo mostrar un ejemplo sin compromiso "
+            "y remata con 'Quedo atento, muchas gracias.' (0 exclamaciones). 50-80 palabras."
+        ),
+    },
+    {
+        "id": "observacion_puntual",
+        "nombre": "Observación puntual + pregunta de colega",
+        "guia": (
+            "Asunto de 1-4 palabras. Saludo sobrio de Raymond ('Buen día, señores [Marca],' o 'Hola [Nombre],'). "
+            "Abre con una observación concreta sobre lo que viste en su perfil/web ('me surgió la duda de...'), "
+            "sin halagos vacíos. Conecta en 1 frase práctica y cierra con pregunta directa ('¿les funciona para su formato "
+            "o ya lo tienen resuelto?'). Remata con 'Quedo atento, muchas gracias.' (0 exclamaciones). 45-75 palabras."
+        ),
+    },
+    {
+        "id": "caso_real",
+        "nombre": "Caso real breve sin cifras",
+        "guia": (
+            "Asunto de 1-4 palabras. Saludo natural de Raymond y presentación breve como Raymond, de El Socio. "
+            "Conecta su negocio (del dossier) con un caso real y concreto que ya resolvimos (ej. motor que edita "
+            "historias automáticas para un bar, marca creada desde cero, registro INVIMA — sin cifras ni inventos). "
+            "Explica en 1 línea cómo aplicaría hoy y pregunta con calma si vale la pena mostrarles cómo funciona. "
+            "Cierra con 'Quedo atento, muchas gracias.' (0 exclamaciones). 55-85 palabras."
+        ),
+    },
+    {
+        "id": "ultra_breve",
+        "nombre": "Nota relámpago desde el celular",
+        "guia": (
+            "Estilo ultra directo de Raymond desde el celular (35-55 palabras, asunto de 1-3 palabras, 0 exclamaciones). "
+            "Saludo corto + qué viste en su perfil/web + qué resuelves en El Socio + pregunta liviana "
+            "('¿les sirve ver un ejemplo o ahorita no están en eso? Quedo atento, muchas gracias.'). Cero adornos."
+        ),
+    },
+)
+MODELOS_POR_ID: dict[str, dict[str, str]] = {m["id"]: m for m in MODELOS_CORREO}
+MIN_ENVIOS_EXPLORACION = 4  # envíos reales por modelo antes de favorecer al ganador
+
+
+def puntaje_modelo_correo(stats: dict[str, int]) -> float:
+    """Puntaje conservador suavizado: premia interesados reales y penaliza bajas/rechazos."""
+    enviados = int(stats.get("enviados", 0))
+    positivos = int(stats.get("positivos", 0))
+    respuestas = int(stats.get("respuestas", 0))
+    negativos = int(stats.get("negativos", 0))
+    neutras = max(0, respuestas - positivos)
+    return round((positivos * 3.0 + neutras * 1.0 - negativos * 2.0 + 0.5) / (enviados + 2.0), 4)
+
+
+def _stats_para_seleccion(nicho: str = "") -> tuple[dict[str, dict[str, int]], str]:
+    """Usa datos del nicho si ya hay muestra útil; si no, usa el consolidado real de todos los nichos."""
+    if not database.DB_PATH.exists():
+        return {}, "sin_bd"
+    por_nicho = database.summarize_email_style_performance(nicho) if (nicho or "").strip() else {}
+    total_nicho = sum(int(v.get("enviados", 0)) for v in por_nicho.values())
+    if total_nicho >= len(MODELOS_CORREO) * MIN_ENVIOS_EXPLORACION:
+        return por_nicho, f"nicho:{nicho.strip()}"
+    global_stats = database.summarize_email_style_performance("")
+    return global_stats, "global"
+
+
+def resumen_rendimiento_modelos(nicho: str = "") -> list[dict[str, object]]:
+    """Tabla limpia de rendimiento real de los 4 modelos (para diagnóstico y dry-run)."""
+    stats, _ = _stats_para_seleccion(nicho)
+    salida: list[dict[str, object]] = []
+    for m in MODELOS_CORREO:
+        st = stats.get(m["id"], {"enviados": 0, "positivos": 0, "respuestas": 0, "negativos": 0})
+        salida.append({
+            "id": m["id"],
+            "nombre": m["nombre"],
+            "enviados": int(st.get("enviados", 0)),
+            "positivos": int(st.get("positivos", 0)),
+            "respuestas": int(st.get("respuestas", 0)),
+            "negativos": int(st.get("negativos", 0)),
+            "puntaje": puntaje_modelo_correo(st),
+        })
+    return salida
+
+
+def elegir_modelo_correo(nicho: str = "") -> dict[str, object]:
+    """Elige el modelo de correo combinando exploración equilibrada + uso del ganador real.
+
+    - Mientras algún modelo tenga menos de `MIN_ENVIOS_EXPLORACION` envíos (o no haya ninguna
+      señal real todavía), rota por el menos probado evitando repetir el inmediatamente anterior.
+    - Cuando ya hay datos reales, usa el modelo ganador el 75% de las veces (3 de cada 4 envíos)
+      y dedica el 25% restante (1 de cada 4) a seguir probando el segundo mejor modelo sano
+      (nunca uno con tasa alta de bajas) para adaptarse al mercado sin estancarse.
+    """
+    stats, alcance = _stats_para_seleccion(nicho)
+    ultimo = database.get_last_used_email_style(nicho) or database.get_last_used_email_style("")
+
+    evaluados: list[tuple[dict[str, str], dict[str, int], float]] = []
+    for m in MODELOS_CORREO:
+        st = stats.get(m["id"], {"enviados": 0, "positivos": 0, "respuestas": 0, "negativos": 0})
+        evaluados.append((m, st, puntaje_modelo_correo(st)))
+
+    total_enviados = sum(int(st["enviados"]) for _, st, _ in evaluados)
+    hay_senales = any(
+        int(st["positivos"]) > 0 or int(st["respuestas"]) > 0 or int(st["negativos"]) > 0
+        for _, st, _ in evaluados
+    )
+    falta_explorar = any(int(st["enviados"]) < MIN_ENVIOS_EXPLORACION for _, st, _ in evaluados)
+
+    if falta_explorar or not hay_senales:
+        # Fase de exploración: elige el menos enviado (evitando repetir el último en empate).
+        candidatos = sorted(
+            evaluados,
+            key=lambda item: (int(item[1]["enviados"]), 1 if item[0]["id"] == ultimo else 0),
+        )
+        elegido, st, score = candidatos[0]
+        return {
+            "id": elegido["id"],
+            "nombre": elegido["nombre"],
+            "guia": elegido["guia"],
+            "modo": "exploracion",
+            "alcance": alcance,
+            "puntaje": score,
+            "stats": st,
+        }
+
+    # Fase de aprendizaje: ordena de mayor a menor efectividad real.
+    ordenados = sorted(
+        evaluados,
+        key=lambda item: (-item[2], -int(item[1]["positivos"]), int(item[1]["negativos"]), int(item[1]["enviados"])),
+    )
+    ganador, st_g, score_g = ordenados[0]
+
+    # 1 de cada 4 envíos explora un retador sano (sin alta tasa de bajas) para seguir aprendiendo.
+    if total_enviados % 4 == 3 and len(ordenados) > 1:
+        retadores_sanos = [
+            item for item in ordenados[1:]
+            if not (int(item[1]["negativos"]) >= 2 and int(item[1]["negativos"]) > int(item[1]["positivos"]))
+        ]
+        if retadores_sanos:
+            retadores_sanos.sort(key=lambda item: (int(item[1]["enviados"]), -item[2]))
+            retador, st_r, score_r = retadores_sanos[0]
+            return {
+                "id": retador["id"],
+                "nombre": retador["nombre"],
+                "guia": retador["guia"],
+                "modo": "aprendizaje_exploracion",
+                "alcance": alcance,
+                "puntaje": score_r,
+                "stats": st_r,
+                "ganador_actual": ganador["id"],
+            }
+
+    return {
+        "id": ganador["id"],
+        "nombre": ganador["nombre"],
+        "guia": ganador["guia"],
+        "modo": "ganador",
+        "alcance": alcance,
+        "puntaje": score_g,
+        "stats": st_g,
+    }
 
 
 # Lo que escribe un lead cuando quiere que lo dejen en paz. Se actúa en CÓDIGO:
@@ -355,12 +609,13 @@ HERRAMIENTAS = [
         "name": "enviar_correo",
         "description": ("Encola un correo para este lead. No lo envía al instante: lo pone en la cola "
                         "y el motor lo manda respetando horario y tope diario. Prohibido escribir "
-                        "cifras, precios, formas de pago o links de pago — el correo se rechaza."),
+                        "cifras, precios, formas de pago, links de pago, clichés de IA, firmas ni "
+                        "líneas de baja duplicadas (el motor agrega firma limpia y baja automática)."),
         "input_schema": {
             "type": "object",
             "properties": {
-                "asunto": {"type": "string", "description": "Asunto corto, sin cifras."},
-                "cuerpo": {"type": "string", "description": "Texto del correo, en español, corto y directo."},
+                "asunto": {"type": "string", "description": "Asunto humano y único de 2 a 5 palabras (minúsculas naturales, sin cifras ni preguntas de vendedor)."},
+                "cuerpo": {"type": "string", "description": "Texto natural de 2-3 micro-párrafos cortos (45-85 palabras en frío), sin firma ni línea de baja repetida."},
             },
             "required": ["asunto", "cuerpo"],
             "additionalProperties": False,
@@ -524,7 +779,16 @@ def construir_system_prompt() -> str:
         "- Cualquier cifra, número de precio, porcentaje, forma de pago o link de pago en un correo "
         "lo bloquea el código (incluso si una guía general menciona 'un número', en El Socio usa "
         "SIEMPRE casos reales cualitativos sin cifras). Si necesitas hablar de valor, usa pedir_precio_al_dueno.\n"
-        "- Tienes pocos turnos. Haz lo necesario y termina."
+        "- El código también bloquea correos en frío con clichés de IA, viñetas, emojis de relleno, "
+        "exceso de longitud o asuntos repetidos el mismo día.\n"
+        "- NO escribas firma ('Saludos, El Socio', 'Raymond') ni líneas de baja: el motor agrega la "
+        "firma minimalista y el pie de baja una sola vez al enviar.\n"
+        "- Si el dossier demuestra que el negocio NO encaja con El Socio (ej. telecomunicaciones, "
+        "clínica médica sin tienda online, empresa gigante irrelevante), NO envíes correo: llama "
+        "`cambiar_etapa` con `no_interesado` explicando por qué.\n"
+        "- Autorrespuestas, confirmaciones de `Form Submitted`, mensajes de tokens/códigos de verificación, "
+        "tickets automáticos o avisos de sistema NUNCA son leads ni ventas: jamás los respondas ni avises al dueño.\n"
+        "- Tienes pocos turnos. Analiza el dossier, redacta algo realmente humano y termina."
     )
     return "\n\n".join(partes)
 
@@ -589,6 +853,7 @@ class AgenteVentas:
         self.modelo = self.conf["modelo"]
         self.turno = 0
         self.lead: dict | None = None
+        self.estilo_actual: str = ""
         self.costo_corrida = 0.0
         self.acciones: list[str] = []
 
@@ -688,8 +953,28 @@ class AgenteVentas:
         if not destinatario:
             return False, "No hay un correo de destino para este lead."
 
-        if es_frio:
-            cuerpo = asegurar_linea_de_baja(cuerpo)
+        asuntos_hoy = []
+        if not self.simulado and database.DB_PATH.exists():
+            try:
+                asuntos_hoy = database.list_recent_subjects_today()
+            except Exception:
+                asuntos_hoy = []
+
+        defectos = revisar_calidad_humana(
+            asunto, cuerpo, es_frio=es_frio, asuntos_recientes=asuntos_hoy,
+        )
+        if defectos:
+            detalle_calidad = "; ".join(defectos[:5])
+            self._log("enviar_correo", argumentos=json.dumps(args, ensure_ascii=False),
+                      resultado="rechazado por calidad humana", bloqueado=f"calidad: {detalle_calidad}")
+            self.acciones.append(f"correo BLOQUEADO por calidad ({detalle_calidad})")
+            return False, (
+                "BLOQUEADO por filtro de calidad humana: " + detalle_calidad +
+                ". Reescribe como un humano real (45-85 palabras, asunto único de 2-5 palabras, "
+                "sin clichés de IA, sin viñetas y sin firma)."
+            )
+
+        cuerpo = normalizar_cuerpo_correo(cuerpo, es_frio=es_frio)
 
         if not self.simulado and database.already_emailed_today(destinatario):
             return False, "Ya hay un correo encolado o enviado hoy a esta dirección. No dupliques."
@@ -702,13 +987,17 @@ class AgenteVentas:
             self.acciones.append(f"[dry-run] correo a {destinatario} | asunto: {asunto}")
             return True, "Correo validado y listo para encolar (dry-run: no se encoló)."
 
+        estilo_envio = self.estilo_actual if es_frio else ""
         job_id = database.enqueue_email(
             recipient=destinatario, subject=asunto, body=cuerpo,
             nicho=(self.lead or {}).get("nicho", ""),
+            estilo=estilo_envio,
         )
-        self._log("enviar_correo", argumentos=json.dumps({"asunto": asunto}, ensure_ascii=False),
+        self._log("enviar_correo",
+                  argumentos=json.dumps({"asunto": asunto, "estilo": estilo_envio}, ensure_ascii=False),
                   resultado=f"encolado job {job_id}")
-        self.acciones.append(f"correo encolado (job {job_id}) a {destinatario}")
+        sufijo_estilo = f" [modelo: {estilo_envio}]" if estilo_envio else ""
+        self.acciones.append(f"correo encolado (job {job_id}) a {destinatario}{sufijo_estilo}")
         # Contactado en frío = ya no es un lead nuevo. Lo mueve el CÓDIGO, no el modelo:
         # si se deja en 'nuevo_lead', mañana vuelve a salir en la lista de contacto en frío.
         if es_frio and str((self.lead or {}).get("stage") or "") == "nuevo_lead" and self.lead.get("id"):
@@ -798,6 +1087,71 @@ class AgenteVentas:
 
     # --- lead -----------------------------------------------------------
 
+    _PREFIJOS_CORREO_GENERICO = frozenset({
+        "info", "hola", "contacto", "contactenos", "ventas", "comercial", "gerencia",
+        "pedidos", "mercadeo", "diseno", "estudio", "proyectos", "direccion", "atencion",
+        "tienda", "administracion", "servicioalcliente", "soporte", "hello", "contact",
+        "sales", "team", "equipo", "soluciones", "salud", "clientes", "reservas",
+    })
+
+    @classmethod
+    def _extraer_nombre_persona_email(cls, email_addr: str) -> str:
+        """Detecta nombre real solo si el correo es claramente de persona (ej. santiago.salazar@...)."""
+        local = (email_addr or "").split("@", 1)[0].strip().lower()
+        if not local or local in cls._PREFIJOS_CORREO_GENERICO:
+            return ""
+        if "." in local or "_" in local:
+            primero = re.split(r"[._-]+", local)[0]
+            if primero.isalpha() and 3 <= len(primero) <= 14 and primero not in cls._PREFIJOS_CORREO_GENERICO:
+                return primero.capitalize()
+        return ""
+
+    def _enriquecer_lead_si_falta(self, nicho_efectivo: str) -> None:
+        """Investiga la web del lead si todavía no tiene dossier (solo fuera de dry-run)."""
+        if self.dry_run or not self.lead or (self.lead.get("dossier") or "").strip():
+            return
+        email_lead = (self.lead.get("email") or "").strip()
+        if not email_lead or "@" not in email_lead:
+            return
+        try:
+            import prospect_hunter  # noqa: PLC0415
+
+            perfil = prospect_hunter.enriquecer_lead_por_dominio(
+                email_lead, nicho=nicho_efectivo, website=str(self.lead.get("website") or ""),
+            )
+            if not perfil:
+                return
+            nueva_marca = str(perfil.get("marca") or "").strip()
+            empresa_actual = str(self.lead.get("company") or "").strip()
+            empresa_final = (
+                nueva_marca
+                if nueva_marca and (not empresa_actual or prospect_hunter._parece_titulo_seo(empresa_actual))
+                else empresa_actual
+            )
+            dossier_txt = str(perfil.get("dossier") or "").strip()
+            if not perfil.get("encaja"):
+                motivo = str(perfil.get("motivo_descarte") or "fuera_de_nicho")
+                dossier_txt = (dossier_txt + f"\nALERTA DE ENCAJE: posible negocio fuera de nicho ({motivo}).").strip()
+            website_txt = str(perfil.get("website") or self.lead.get("website") or "").strip()
+            wa_txt = str(perfil.get("whatsapp") or self.lead.get("whatsapp") or "").strip()
+
+            self.lead["company"] = empresa_final
+            self.lead["website"] = website_txt
+            self.lead["dossier"] = dossier_txt
+            if wa_txt:
+                self.lead["whatsapp"] = wa_txt
+
+            if self.lead.get("id"):
+                database.update_lead_enrichment(
+                    int(self.lead["id"]),
+                    company=empresa_final or None,
+                    whatsapp=wa_txt or None,
+                    website=website_txt,
+                    dossier=dossier_txt,
+                )
+        except Exception:
+            pass
+
     def _cargar_lead(self, lead_email: str, nicho: str) -> dict:
         """En dry-run nunca crea el lead; si no existe, se arma en memoria."""
         existente = None
@@ -807,13 +1161,16 @@ class AgenteVentas:
             return existente
         if self.dry_run:
             return {"id": None, "email": lead_email.lower().strip(), "company": "",
-                    "nicho": nicho, "stage": "nuevo_lead", "notes": "", "bounced": 0}
+                    "nicho": nicho, "stage": "nuevo_lead", "notes": "", "bounced": 0,
+                    "website": "", "dossier": ""}
         lead_id = database.upsert_lead(
             name="", company="", email=lead_email, nicho=nicho,
             source="sales_agent", stage="nuevo_lead", notes="Creado por sales_agent",
         )
         return database.get_lead_by_email(lead_email) or {
-            "id": lead_id, "email": lead_email.lower().strip(), "stage": "nuevo_lead", "bounced": 0}
+            "id": lead_id, "email": lead_email.lower().strip(), "stage": "nuevo_lead",
+            "bounced": 0, "website": "", "dossier": "",
+        }
 
     def _dar_de_baja(self, porque: str) -> None:
         """Baja aplicada por el código: etapa + cancelación de todo lo pendiente."""
@@ -848,6 +1205,15 @@ class AgenteVentas:
 
     def correr(self, *, lead_email: str, mensaje_lead: str = "", nicho: str = "",
                motivo_seguimiento: str = "") -> dict:
+        # Autorrespuestas, Form Submitted, tokens y avisos de sistema NUNCA son leads ni ventas:
+        # se cortan antes de gastar saldo o tocar el lead.
+        if mensaje_lead.strip() and autopilot_dispatcher.es_correo_automatico(
+            "", mensaje_lead, sender_email=lead_email,
+        ):
+            self.acciones.append("autorrespuesta ignorada (Form Submitted / token / correo automático)")
+            return {"ok": True, "motivo": "autorrespuesta_ignorada", "acciones": self.acciones,
+                    "costo_usd": 0.0, "turnos": 0}
+
         # La baja va PRIMERO, antes de los topes y de exigir la API key: dar de baja cuesta
         # 0 USD y 0 correos, y a nadie se le puede negar por un tope diario. No se crea el
         # lead si no existe: solo se cierra el que ya está en la BD.
@@ -883,26 +1249,65 @@ class AgenteVentas:
         es_seguimiento = es_frio and bool(motivo_seguimiento)
         system_prompt = construir_system_prompt()
         nicho_efectivo = (self.lead.get("nicho") or nicho or "").strip()
+
+        # Antes de escribir en frío, analiza la web del lead si todavía no tenemos dossier
+        # y elige el modelo de correo más efectivo según resultados reales del mercado.
+        modelo_elegido: dict[str, object] | None = None
+        self.estilo_actual = ""
+        if es_frio and not es_seguimiento:
+            self._enriquecer_lead_si_falta(nicho_efectivo)
+            modelo_elegido = elegir_modelo_correo(nicho_efectivo)
+            self.estilo_actual = str(modelo_elegido["id"])
+
         guia_nicho = cargar_contexto_nicho_sin_precios(nicho_efectivo)
+        nombre_persona = self._extraer_nombre_persona_email(str(self.lead.get("email") or ""))
+        dossier_lead = str(self.lead.get("dossier") or "").strip()
+        web_lead = str(self.lead.get("website") or "").strip()
+
         contexto_lead = (
             f"Lead: {self.lead.get('email')}\n"
-            f"Empresa: {self.lead.get('company') or '(no se sabe)'}\n"
+            f"Persona detectada: {nombre_persona or '(correo general de empresa)'}\n"
+            f"Marca / Empresa: {self.lead.get('company') or '(no se sabe)'}\n"
+            f"Web: {web_lead or '(no detectada)'}\n"
             f"Nicho: {nicho_efectivo or '(no se sabe)'}\n"
             f"Etapa actual: {self.lead.get('stage')}\n"
             f"Notas previas: {(self.lead.get('notes') or '(ninguna)')[:600]}\n\n"
         )
+        if dossier_lead:
+            contexto_lead += (
+                "Dossier real extraído de su sitio web (ÚSALO para personalizar de verdad sin inventar nada):\n"
+                f"{dossier_lead[:1600]}\n\n"
+            )
         if guia_nicho:
-            contexto_lead += f"Contexto y dolor real del nicho (úsalos sin inventar datos):\n{guia_nicho}\n\n"
+            contexto_lead += (
+                "Referencia de dolor del nicho (inspírate en tus propias palabras, PROHIBIDO copiar frases textuales):\n"
+                f"{guia_nicho}\n\n"
+            )
         if es_seguimiento:
             contexto_lead += (
                 "Esto NO es un primer contacto en frío: es un SEGUIMIENTO programado de un correo "
                 "que ya le escribiste y que todavía no te ha contestado.\n"
                 f"Motivo del seguimiento: {motivo_seguimiento[:300]}\n"
-                "Escríbele un correo corto que retome lo anterior sin repetirlo y sin reclamarle "
-                "el silencio. No te presentes otra vez como si fuera la primera.")
+                "Escríbele un correo muy corto (35-55 palabras) que retome lo anterior de forma relajada, "
+                "sin repetir el correo pasado, sin reclamar el silencio y sin firma.")
         elif es_frio:
-            contexto_lead += ("No ha escrito nada: es primer contacto en frío. Escríbele un correo corto "
-                              "con un ángulo concreto para su negocio y programa el seguimiento.")
+            bloque_modelo = ""
+            if modelo_elegido:
+                bloque_modelo = (
+                    f"\nModelo de correo asignado para esta prueba ({modelo_elegido['id']} — "
+                    f"{modelo_elegido['nombre']} | modo: {modelo_elegido['modo']}):\n"
+                    f"{modelo_elegido['guia']}\n"
+                    "Mantén siempre la voz sobria y humana de El Socio (cero exageraciones ni trucos grotescos).\n"
+                )
+            contexto_lead += (
+                "Es primer contacto en frío. Primero analiza el dossier:\n"
+                "1) Si el negocio claramente NO encaja con El Socio (ej. telecom, banco, clínica médica sin tienda online), "
+                "NO le escribas: llama `cambiar_etapa` con `no_interesado` y explica el motivo.\n"
+                "2) Si SÍ encaja, redacta el correo siguiendo el modelo asignado abajo, usando al menos un detalle "
+                "real del dossier. Asunto humano de 2-5 palabras, sin firma y sin línea de baja manual. "
+                "Luego programa el seguimiento."
+                + bloque_modelo
+            )
         else:
             contexto_lead += f"Mensaje del lead:\n\"\"\"\n{mensaje_lead.strip()[:3000]}\n\"\"\""
 
@@ -918,6 +1323,9 @@ class AgenteVentas:
             else:
                 modo = "correo en frío" if es_frio else "respuesta a un mensaje"
             self.acciones.append(f"[dry-run] modo: {modo}")
+            if modelo_elegido:
+                self.acciones.append(
+                    f"[dry-run] modelo de correo elegido: {modelo_elegido['id']} ({modelo_elegido['modo']})")
             self.acciones.append(
                 "[dry-run] herramientas listas: " + ", ".join(h["name"] for h in HERRAMIENTAS))
             self.acciones.append(
@@ -940,7 +1348,7 @@ class AgenteVentas:
                             "cache_control": {"type": "ephemeral"}}],
                 "tools": HERRAMIENTAS,
                 "messages": mensajes,
-                "output_config": {"effort": "low"},  # saldo corto: lo justo para operar
+                "output_config": {"effort": "medium"},
             }
             try:
                 respuesta = llamar_api(api_key, cuerpo)

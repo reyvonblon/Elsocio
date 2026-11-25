@@ -17,6 +17,7 @@ import argparse
 import mimetypes
 import sys
 import urllib.parse
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -30,13 +31,23 @@ import content_manager  # noqa: E402
 import database  # noqa: E402
 import ig_publisher  # noqa: E402
 import panel_mensajes  # noqa: E402
+import socio_chat  # noqa: E402
 
 
-def _archivo_seguro_de_pieza(content_id: int) -> Path | None:
+def _archivo_seguro_de_pieza(content_id: int, lamina: int = 0) -> Path | None:
+    """`lamina=0` → el archivo principal. `lamina>0` → esa lámina del carrusel (1-based)."""
     pieza = database.get_content(content_id)
     if not pieza or not pieza.get("archivo"):
         return None
-    ruta = Path(str(pieza["archivo"])).resolve()
+    if lamina > 0:
+        if str(pieza.get("tipo") or "").strip().lower() != "carrusel":
+            return None
+        laminas = content_manager.archivos_carrusel(pieza["archivo"])
+        if lamina > len(laminas):
+            return None
+        ruta = laminas[lamina - 1].resolve()
+    else:
+        ruta = Path(str(pieza["archivo"])).resolve()
     try:
         ruta.relative_to(REDES_ROOT)
     except ValueError:
@@ -77,6 +88,18 @@ def ejecutar_accion_panel(accion: str, form: dict[str, str]) -> str:
             database.update_settings(cambios)
         return " · ".join(notas) if notas else "No pegaste ninguna clave nueva."
 
+    if accion == "preguntar":
+        pregunta = (form.get("pregunta") or "").strip()
+        if not pregunta:
+            return "Escribe algo en el cuadro antes de preguntar."
+        respuesta = socio_chat.responder(pregunta)
+        database.update_settings({
+            "chat_ultima_pregunta": pregunta,
+            "chat_ultima_respuesta": respuesta,
+            "chat_ultima_fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        })
+        return "Te respondió El Socio, bajá a 'Pregúntale a El Socio' para verlo."
+
     try:
         cid = int(form.get("id") or "0")
     except ValueError:
@@ -97,8 +120,77 @@ def ejecutar_accion_panel(accion: str, form: dict[str, str]) -> str:
 
 
 class ManejadorPanel(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, fmt: str, *args) -> None:  # noqa: ANN002
         return  # Silencioso en segundo plano
+
+    def _servir_media(self, parte_id: str, solo_headers: bool = False) -> None:
+        cid_txt, _, lamina_txt = parte_id.partition("_")
+        if not cid_txt.isdigit() or (lamina_txt and not lamina_txt.isdigit()):
+            self.send_error(404)
+            return
+        archivo = _archivo_seguro_de_pieza(int(cid_txt), int(lamina_txt or 0))
+        if not archivo:
+            self.send_error(404)
+            return
+        datos = archivo.read_bytes()
+        total = len(datos)
+        mime = mimetypes.guess_type(archivo.name)[0] or "application/octet-stream"
+        rango = (self.headers.get("Range") or "").strip()
+        inicio, fin = 0, total - 1
+        es_parcial = False
+        if rango.startswith("bytes=") and total > 0:
+            parte = rango[6:].split(",", 1)[0].strip()
+            if "-" in parte:
+                izq, _, der = parte.partition("-")
+                try:
+                    if not izq and der:
+                        inicio = max(0, total - int(der))
+                    elif izq:
+                        inicio = int(izq)
+                        fin = int(der) if der else total - 1
+                    fin = min(fin, total - 1)
+                    if inicio > fin or inicio >= total:
+                        self.send_response(416)
+                        self.send_header("Content-Range", f"bytes */{total}")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    es_parcial = True
+                except ValueError:
+                    es_parcial = False
+        tramo = datos[inicio:fin + 1] if es_parcial else datos
+        self.send_response(206 if es_parcial else 200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "private, max-age=60")
+        self.send_header("Content-Disposition", f'inline; filename="{archivo.name}"')
+        if es_parcial:
+            self.send_header("Content-Range", f"bytes {inicio}-{fin}/{total}")
+        self.send_header("Content-Length", str(len(tramo)))
+        self.end_headers()
+        if solo_headers:
+            return
+        try:
+            self.wfile.write(tramo)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def do_HEAD(self) -> None:  # noqa: N802
+        parsed = urllib.parse.urlparse(self.path)
+        ruta = parsed.path
+        if ruta.startswith("/media/"):
+            self._servir_media(ruta.removeprefix("/media/").strip("/"), solo_headers=True)
+            return
+        if ruta in ("/", "/mensajes.html"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        self.send_error(404)
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
@@ -123,21 +215,7 @@ class ManejadorPanel(BaseHTTPRequestHandler):
             return
 
         if ruta.startswith("/media/"):
-            parte_id = ruta.removeprefix("/media/").strip("/")
-            if not parte_id.isdigit():
-                self.send_error(404)
-                return
-            archivo = _archivo_seguro_de_pieza(int(parte_id))
-            if not archivo:
-                self.send_error(404)
-                return
-            datos = archivo.read_bytes()
-            mime = mimetypes.guess_type(archivo.name)[0] or "application/octet-stream"
-            self.send_response(200)
-            self.send_header("Content-Type", mime)
-            self.send_header("Content-Length", str(len(datos)))
-            self.end_headers()
-            self.wfile.write(datos)
+            self._servir_media(ruta.removeprefix("/media/").strip("/"), solo_headers=False)
             return
 
         self.send_error(404)
@@ -154,6 +232,7 @@ class ManejadorPanel(BaseHTTPRequestHandler):
         destino = "/mensajes.html?" + urllib.parse.urlencode({"aviso": aviso})
         self.send_response(303)
         self.send_header("Location", destino)
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
 

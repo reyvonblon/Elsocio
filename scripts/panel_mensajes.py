@@ -19,6 +19,7 @@ OUT_PATH = PROJECT_ROOT / "panel" / "mensajes.html"
 if str(PROJECT_ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
+import content_manager  # noqa: E402
 import database  # noqa: E402
 
 ESTADO_COLOR = {
@@ -53,6 +54,18 @@ def _url_preview(pieza: dict, *, interactivo: bool) -> tuple[str, str]:
     return "", ""
 
 
+def _urls_carrusel(pieza: dict, *, interactivo: bool) -> list[str]:
+    """Todas las láminas reales de un carrusel (no solo la primera)."""
+    laminas = content_manager.archivos_carrusel(pieza.get("archivo"))
+    srcs = []
+    for i, ruta in enumerate(laminas, start=1):
+        if interactivo:
+            srcs.append(f"/media/{int(pieza['id'])}_{i}")
+        else:
+            srcs.append(html.escape(os.path.relpath(ruta, OUT_PATH.parent)))
+    return srcs
+
+
 def render_contenido(piezas: list[dict], *, interactivo: bool = False) -> str:
     if not piezas:
         return ('<tr><td colspan="4" class="empty">'
@@ -65,17 +78,38 @@ def render_contenido(piezas: list[dict], *, interactivo: bool = False) -> str:
         gancho = html.escape(str(p.get("gancho") or ""))
         caption = html.escape(str(p.get("caption") or ""))
         guion = html.escape(str(p.get("guion") or ""))
-        tipo = html.escape(str(p.get("tipo") or ""))
-        estado = html.escape(est_crudo)
+        tipo_crudo = str(p.get("tipo") or "").strip().lower()
+        etiqueta_tipo = {"video": "Reel (video)", "post": "Post (imagen)", "historia": "Historia (9:16)",
+                         "carrusel": "Carrusel (láminas)"}.get(
+            tipo_crudo, tipo_crudo
+        )
+        tipo = html.escape(etiqueta_tipo)
+        etiqueta_estado = {"aprobado": "en cola"}.get(est_crudo, est_crudo)
+        estado = html.escape(etiqueta_estado)
         archivo_nombre = html.escape(Path(str(p.get("archivo") or "")).name)
         error_ig = html.escape(str(p.get("error_ig") or ""))
 
         tipo_media, src_media = _url_preview(p, interactivo=interactivo)
         preview_html = ""
-        if tipo_media == "video":
+        if tipo_crudo == "carrusel":
+            srcs_carrusel = _urls_carrusel(p, interactivo=interactivo)
+            if srcs_carrusel:
+                miniaturas = "".join(
+                    f'<img src="{s}" alt="Lámina {i} de #{pid}" />' for i, s in enumerate(srcs_carrusel, start=1)
+                )
+                preview_html = (
+                    f'<div class="media-box carrusel-box">{miniaturas}'
+                    f'<div class="meta-txt">{len(srcs_carrusel)} lámina(s)</div></div>'
+                )
+            else:
+                preview_html = '<div class="err-txt">El carrusel todavía no tiene láminas renderizadas.</div>'
+        elif tipo_media == "video":
             preview_html = (
-                f'<div class="media-box"><video controls playsinline preload="metadata" '
-                f'src="{src_media}"></video></div>'
+                f'<div class="media-box">'
+                f'<video controls playsinline preload="metadata" src="{src_media}">'
+                f'<source src="{src_media}" type="video/mp4" /></video>'
+                f'<a class="media-link" href="{src_media}" target="_blank" rel="noopener">Abrir video</a>'
+                f'</div>'
             )
         elif tipo_media == "imagen":
             preview_html = f'<div class="media-box"><img src="{src_media}" alt="Preview #{pid}" /></div>'
@@ -99,11 +133,12 @@ def render_contenido(piezas: list[dict], *, interactivo: bool = False) -> str:
                     f'<button type="submit" class="btn sec">Renderizar</button></form>'
                 )
             if est_crudo == "generado":
+                etiqueta_pub = "Publicar Historia en IG" if tipo_crudo == "historia" else "Publicar en IG"
                 botones.append(
                     f'<form method="POST" action="/accion" class="inline-f">'
                     f'<input type="hidden" name="accion" value="publicar_ig" />'
                     f'<input type="hidden" name="id" value="{pid}" />'
-                    f'<button type="submit" class="btn pri">Publicar en IG</button></form>'
+                    f'<button type="submit" class="btn pri">{etiqueta_pub}</button></form>'
                 )
             botones.append(
                 f'<form method="POST" action="/accion" class="inline-f">'
@@ -134,7 +169,7 @@ def _render_barra_estado(estado_motor: dict | None, *, interactivo: bool) -> str
     auto_ig = bool(estado_motor.get("auto_publish", True))
     correos = html.escape(str(estado_motor.get("correos_hoy", "0/15")))
     gasto = html.escape(str(estado_motor.get("gasto_usd", "$0.00 / $0.50")))
-    posts_ig = html.escape(str(estado_motor.get("posts_ig_hoy", "0/1")))
+    posts_ig = html.escape(str(estado_motor.get("posts_ig_hoy", "0/5")))
     aviso = html.escape(str(estado_motor.get("aviso", "")))
 
     def _chip(nombre: str, ok: bool) -> str:
@@ -190,6 +225,68 @@ def _render_barra_estado(estado_motor: dict | None, *, interactivo: bool) -> str
     </div>"""
 
 
+_ACTIVIDAD_ETIQUETAS = {
+    "ig_publish": ("Publicó en Instagram", False),
+    "ig_publish_error": ("Intentó publicar en Instagram y falló", True),
+    "enviar_correo": ("Encoló un correo de prospección", False),
+    "llamada_api": ("Pensó con la IA (venta o contenido)", False),
+    "chat_panel": ("Respondió una pregunta tuya", False),
+}
+
+
+def _render_actividad(filas: list[dict]) -> str:
+    if not filas:
+        return '<div class="empty">Todavía no hay actividad registrada.</div>'
+    items = ""
+    for f in filas:
+        herramienta = str(f.get("accion") or "")
+        etiqueta, es_error = _ACTIVIDAD_ETIQUETAS.get(herramienta, (herramienta or "(acción)", False))
+        if f.get("bloqueado_por_guarda"):
+            es_error = True
+            etiqueta = "Bloqueado por una guarda de seguridad"
+        fecha = html.escape(str(f.get("fecha") or ""))
+        detalle = html.escape(str(f.get("resultado") or f.get("bloqueado_por_guarda") or ""))
+        clase = "act-err" if es_error else "act-ok"
+        items += (
+            f'<div class="act-row"><span class="act-fecha">{fecha}</span>'
+            f'<span class="act-tag {clase}">{html.escape(etiqueta)}</span>'
+            f'<span class="act-detalle">{detalle}</span></div>'
+        )
+    return items
+
+
+def _render_chat(estado_motor: dict | None, *, interactivo: bool) -> str:
+    estado_motor = estado_motor or {}
+    pregunta_previa = html.escape(str(estado_motor.get("chat_pregunta") or ""))
+    respuesta_previa = html.escape(str(estado_motor.get("chat_respuesta") or "")).replace("\n", "<br>")
+    fecha_previa = html.escape(str(estado_motor.get("chat_fecha") or ""))
+
+    bloque_respuesta = ""
+    if respuesta_previa:
+        bloque_respuesta = f"""
+        <div class="chat-respuesta">
+          <div class="chat-pregunta-eco">Tú ({fecha_previa}): {pregunta_previa}</div>
+          <div class="chat-texto">{respuesta_previa}</div>
+        </div>"""
+
+    formulario = ""
+    if interactivo:
+        formulario = """
+        <form method="POST" action="/accion" class="chat-form">
+          <input type="hidden" name="accion" value="preguntar" />
+          <input type="text" name="pregunta" placeholder="Ej: ¿por qué no ha publicado hoy?" maxlength="500" required
+                 style="flex:1; min-width:220px; background:#0a0a0a; border:1px solid var(--border); color:#fff; border-radius:8px; padding:9px 12px; font-size:13px;" />
+          <button type="submit" class="btn pri">Preguntar</button>
+        </form>"""
+
+    return f"""
+    <div class="status-card">
+      <div class="sub" style="margin-bottom:10px;">Pregúntale en español qué está haciendo, por qué no envió/publicó, o cómo va — responde solo con datos reales del sistema.</div>
+      {formulario}
+      {bloque_respuesta}
+    </div>"""
+
+
 def render(
     messages: list[dict], piezas: list[dict] | None = None, *,
     estado_motor: dict | None = None, interactivo: bool = False,
@@ -213,6 +310,8 @@ def render(
 
     filas_contenido = render_contenido(piezas or [], interactivo=interactivo)
     barra_estado = _render_barra_estado(estado_motor, interactivo=interactivo)
+    actividad_html = _render_actividad((estado_motor or {}).get("actividad") or [])
+    chat_html = _render_chat(estado_motor, interactivo=interactivo)
 
     return f"""<!DOCTYPE html>
 <html lang="es">
@@ -251,6 +350,10 @@ def render(
   .err-txt{{ color:#f87171; font-size:12px; margin-top:6px; }}
   .media-box{{ margin-top:10px; }}
   .media-box video, .media-box img{{ max-width:220px; max-height:390px; border-radius:10px; border:1px solid var(--border); display:block; background:#000; }}
+  .carrusel-box{{ display:flex; gap:8px; overflow-x:auto; max-width:100%; padding-bottom:4px; }}
+  .carrusel-box img{{ max-width:140px; max-height:140px; flex:0 0 auto; }}
+  .media-link{{ display:inline-block; margin-top:6px; font-size:12px; color:#93c5fd; text-decoration:none; }}
+  .media-link:hover{{ text-decoration:underline; }}
   .btn-row{{ margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; }}
   .inline-f{{ display:inline; margin:0; }}
   .btn{{ border:0; border-radius:8px; padding:7px 12px; font-size:12px; font-weight:700; cursor:pointer; color:#fff; }}
@@ -259,6 +362,17 @@ def render(
   .btn.mut{{ background:#3a2428; color:#fca5a5; }}
   .badge{{ color:#fff; font-size:11px; padding:4px 10px; border-radius:999px; text-transform:uppercase; letter-spacing:.04em; display:inline-block; }}
   .empty{{ color:var(--muted); text-align:center; padding:40px; }}
+  .act-row{{ display:flex; gap:10px; flex-wrap:wrap; align-items:baseline; padding:7px 0; border-bottom:1px solid var(--border); font-size:12.5px; }}
+  .act-row:last-child{{ border-bottom:none; }}
+  .act-fecha{{ color:var(--muted); white-space:nowrap; min-width:132px; }}
+  .act-tag{{ font-weight:700; }}
+  .act-tag.act-ok{{ color:#4ade80; }}
+  .act-tag.act-err{{ color:#f87171; }}
+  .act-detalle{{ color:var(--muted); }}
+  .chat-form{{ display:flex; gap:10px; flex-wrap:wrap; }}
+  .chat-respuesta{{ margin-top:14px; padding-top:12px; border-top:1px solid var(--border); }}
+  .chat-pregunta-eco{{ color:var(--muted); font-size:12px; margin-bottom:6px; }}
+  .chat-texto{{ font-size:14px; line-height:1.5; }}
 </style>
 </head>
 <body>
@@ -267,7 +381,14 @@ def render(
   <div class="sub">Panel privado en tu WiFi local — cero secretos expuestos.</div>
   {barra_estado}
 
-  <h1>Mensajes de la landing</h1>
+  <h1 style="margin-top:44px">Pregúntale a El Socio</h1>
+  {chat_html}
+
+  <h1 style="margin-top:44px">Actividad reciente</h1>
+  <div class="sub">Lo último que hizo de verdad el sistema (más nuevo arriba).</div>
+  <div class="status-card">{actividad_html}</div>
+
+  <h1 style="margin-top:44px">Mensajes de la landing</h1>
   <div class="sub"> Prospectos que escribieron directo desde tu web.</div>
   <div class="table-wrap">
     <table>
@@ -277,7 +398,7 @@ def render(
   </div>
 
   <h1 style="margin-top:44px">Cola de contenido</h1>
-  <div class="sub">Piezas de Instagram: borrador → aprobado → generado → publicado.</div>
+  <div class="sub">Piezas de Instagram: borrador → en cola → generado → publicado.</div>
   <div class="table-wrap">
     <table>
       <tr><th>#</th><th>Gancho y Preview</th><th>Tipo</th><th>Estado</th></tr>
@@ -301,6 +422,8 @@ def construir_estado_motor(aviso: str = "") -> dict[str, object]:
 
     correos_hoy = database.agent_emails_queued_today() if database.DB_PATH.exists() else 0
     gasto_hoy = database.agent_cost_today_usd() if database.DB_PATH.exists() else 0.0
+    actividad = database.recent_agent_log(limit=15) if database.DB_PATH.exists() else []
+    ajustes = database.get_settings() if database.DB_PATH.exists() else {}
     return {
         "auto_publish": est_ig["auto_publish"],
         "correos_hoy": f"{correos_hoy}/{conf_ventas['max_emails']}",
@@ -311,6 +434,14 @@ def construir_estado_motor(aviso: str = "") -> dict[str, object]:
         "ig_ok": bool(est_ig["credenciales_listas"]),
         "ig_username": est_ig.get("username", ""),
         "aviso": aviso,
+        "actividad": [
+            {"fecha": f["fecha"], "accion": f["herramienta"], "resultado": f["resultado"],
+             "bloqueado_por_guarda": f["bloqueado_por_guarda"]}
+            for f in actividad
+        ],
+        "chat_pregunta": ajustes.get("chat_ultima_pregunta", ""),
+        "chat_respuesta": ajustes.get("chat_ultima_respuesta", ""),
+        "chat_fecha": ajustes.get("chat_ultima_fecha", ""),
     }
 
 
@@ -327,10 +458,47 @@ def regenerate() -> Path:
     return OUT_PATH
 
 
+def _puerto_panel_activo(host: str = "127.0.0.1", port: int = 8787) -> bool:
+    import socket  # noqa: PLC0415
+
+    try:
+        with socket.create_connection((host, port), timeout=0.4):
+            return True
+    except OSError:
+        return False
+
+
+def _asegurar_servidor_panel(port: int = 8787) -> bool:
+    import time  # noqa: PLC0415
+
+    if _puerto_panel_activo(port=port):
+        return True
+    servidor = PROJECT_ROOT / "scripts" / "panel_server.py"
+    if not servidor.is_file():
+        return False
+    subprocess.Popen(
+        [sys.executable, str(servidor), "--host", "0.0.0.0", "--port", str(port)],
+        cwd=str(PROJECT_ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    for _ in range(15):
+        if _puerto_panel_activo(port=port):
+            return True
+        time.sleep(0.15)
+    return False
+
+
 def main() -> None:
     out_path = regenerate()
-    subprocess.run(["open", str(out_path)])
-    print(f"Panel generado: {out_path}")
+    if _asegurar_servidor_panel(8787):
+        url = "http://127.0.0.1:8787/mensajes.html"
+        subprocess.run(["open", url])
+        print(f"Panel abierto en: {url}")
+    else:
+        subprocess.run(["open", str(out_path)])
+        print(f"Panel generado: {out_path}")
 
 
 if __name__ == "__main__":

@@ -15,7 +15,9 @@ humana, respetando prioridades, ventana horaria y todos los topes duros en códi
      cero cifras y renderiza post o Reel con voz humana neuronal.
   7. Publicación oficial en Instagram (`ig_publisher`): si `ig_auto_publish=1` y hay
      credenciales de Meta Graph API, publica solo respetando el tope diario.
-  8. Memoria real de mercado + Panel (`RESULTADOS_MERCADO.md` + `panel/mensajes.html`).
+  8. Memoria real de mercado + Panel (`RESULTADOS_MERCADO.md` + `panel/mensajes.html`) y el
+     paquete `redes/paquete_hoy/` (todo lo `generado` sin publicar, listo para subir a mano
+     mientras no haya claves de Instagram).
 
 `--dry-run` inspecciona los 8 frentes en seco: 0 tokens, 0 red de envío, 0 BD tocada.
 """
@@ -36,6 +38,7 @@ if str(PROJECT_ROOT / "scripts") not in sys.path:
 
 import autopilot_dispatcher  # noqa: E402
 import content_brain  # noqa: E402
+import content_manager  # noqa: E402
 import database  # noqa: E402
 import ig_publisher  # noqa: E402
 import panel_mensajes  # noqa: E402
@@ -58,7 +61,7 @@ def diagnostico_en_seco() -> dict[str, object]:
     return {
         "dry_run": True,
         "motor_ventas": base,
-        "cerebro_contenido": cerebro.crear_pieza_del_dia(renderizar=False),
+        "cerebro_contenido": cerebro.planear_y_crear_lote_diario(renderizar=False),
         "instagram_oficial": ig_publisher.estado_ig(cfg),
         "motor_voz": {
             "proveedor_activo": voice_engine.elegir_proveedor(voice_engine.cargar_config_voz()),
@@ -101,10 +104,12 @@ def correr_latido_autonomo(*, dry_run: bool = False, sin_contenido: bool = False
             respect_pacing=True, respect_window=True,
         )
 
-        # 6 y 7: Contenido + Instagram (SOLO dentro de ventana y tras atender ventas).
+        # 6 y 7: Contenido + Instagram (SOLO dentro de ventana 8:00-21:00 y tras atender ventas).
         if not sin_contenido and en_ventana:
             cerebro_c = content_brain.CerebroContenido(cfg)
-            reporte["cerebro_contenido"] = _ejecutar_seguro(cerebro_c.crear_pieza_del_dia)
+            reporte["cerebro_contenido"] = _ejecutar_seguro(
+                cerebro_c.planear_y_crear_lote_diario, max_renders_video=1,
+            )
             reporte["instagram"] = _ejecutar_seguro(
                 ig_publisher.ciclo_publicacion_autonoma, cfg=cfg,
             )
@@ -119,6 +124,7 @@ def correr_latido_autonomo(*, dry_run: bool = False, sin_contenido: bool = False
         )
         reporte["metricas_ig"] = _ejecutar_seguro(ig_publisher.sincronizar_resultados_ig, cfg=cfg)
         _ejecutar_seguro(panel_mensajes.regenerate)
+        reporte["paquete_manual"] = _ejecutar_seguro(content_manager.armar_paquete_pendiente)
         return reporte
 
 

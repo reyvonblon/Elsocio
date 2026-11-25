@@ -228,6 +228,99 @@ class TestVozHumanaSincronizada(unittest.TestCase):
         self.assertEqual(voice_engine.elegir_proveedor(
             {"OPENAI_API_KEY": "sk-x", "ELEVENLABS_API_KEY": "el-x"}), "elevenlabs")
 
+    def test_humanizar_texto_para_voz_agrega_pausas_de_contraste_y_cierre(self) -> None:
+        bloque = voice_engine.humanizar_texto_para_voz(
+            "En el segundo cortan a la primera pero sin perder tela", rol="bloque"
+        )
+        self.assertIn("En el segundo, cortan", bloque)
+        self.assertIn(", pero sin perder tela.", bloque)
+
+        cierre = voice_engine.humanizar_texto_para_voz(
+            "No seas el Taller A Sé el Taller B Con El Socio, te lo solucionamos",
+            rol="cierre",
+        )
+        self.assertEqual(
+            cierre,
+            'No seas el Taller "A". Sé el Taller "B". Con El Socio te lo solucionamos.',
+        )
+        self.assertNotIn("Taller, A", cierre)
+
+        remate = voice_engine.humanizar_texto_para_voz(
+            "Te va a salir algo... de otra calidad totalmente diferente.", rol="bloque"
+        )
+        self.assertIn("...", remate)
+
+    def test_inferir_xml_lang_y_rate_relativo_4_tiempos(self) -> None:
+        self.assertEqual(voice_engine.inferir_xml_lang("es-CO-GonzaloNeural"), "es-CO")
+        self.assertEqual(voice_engine.inferir_xml_lang("es-MX-JorgeNeural"), "es-MX")
+        self.assertEqual(voice_engine.inferir_xml_lang("it-IT-GiuseppeMultilingualNeural"), "es-CO")
+        self.assertTrue(voice_engine.es_voz_multilingual("it-IT-GiuseppeMultilingualNeural"))
+        self.assertFalse(voice_engine.es_voz_multilingual("es-CO-GonzaloNeural"))
+        self.assertEqual(voice_engine.ajustar_rate_relativo("+4%", 4), "+8%")
+        self.assertEqual(voice_engine.ajustar_rate_relativo("+4%", -6), "-2%")
+
+    def test_agrupar_fases_reel_separa_gancho_lado_a_pivote_b_y_cierre(self) -> None:
+        frases = [
+            "Dos marcas sacan colección esta semana.",
+            "Una manda una foto por WhatsApp al taller.",
+            "En el primer taller, el patronista adivina las medidas.",
+            "En el segundo, cortan a la primera.",
+            'No seas el Taller "A". Sé el Taller "B". Con El Socio te lo solucionamos.',
+        ]
+        fases = voice_engine.agrupar_fases_reel(frases, n_bloques=3)
+        self.assertEqual([f["fase"] for f in fases], ["gancho", "lado_a", "pivote_b", "cierre"])
+        self.assertEqual(fases[1]["indices"], [1, 2])
+        self.assertEqual(fases[2]["indices"], [3])
+        self.assertGreater(fases[1]["delta_rate"], fases[3]["delta_rate"],
+                           "el cierre debe bajar velocidad frente al desarrollo")
+        self.assertAlmostEqual(fases[2]["pausa_previa_seg"], voice_engine.PAUSA_PIVOTE_AB_SEG)
+
+    def test_esculpir_pausas_pcm_recorta_silencio_muerto_y_remapea_tiempos(self) -> None:
+        import array
+        import math
+        sr = 24000
+        # 0.40s tono + 0.96s silencio muerto + 0.40s tono (1.76s total)
+        tono = array.array("h", [int(12000 * math.sin(2 * math.pi * 220 * i / sr)) for i in range(int(0.40 * sr))])
+        silencio_muerto = array.array("h", [0] * int(0.96 * sr))
+        crudo = array.array("h", list(tono) + list(silencio_muerto) + list(tono))
+
+        esculpido, mapa = voice_engine.esculpir_pausas_pcm(crudo, sr, max_pausa_seg=0.22)
+        dur_esculpida = len(esculpido) / sr
+        self.assertLess(dur_esculpida, 1.25, "el silencio muerto de 0.96s debió recortarse a ~0.22s")
+        self.assertGreater(dur_esculpida, 0.90, "no debe comerse la voz activa")
+
+        # El segundo tono arrancaba en 1.36s; tras recortar ~0.74s debe mapearse cerca de ~0.62s.
+        t_segundo = voice_engine.mapear_tiempo_esculpido(1.36, mapa)
+        self.assertGreater(t_segundo, 0.50)
+        self.assertLess(t_segundo, 0.78)
+
+        unido, offsets = voice_engine.unir_fases_pcm([(tono, 0.0), (tono, 0.38)], sr=sr)
+        self.assertEqual(len(offsets), 2)
+        self.assertAlmostEqual(offsets[0], 0.0, places=2)
+        self.assertAlmostEqual(offsets[1], 0.78, places=2)
+        self.assertGreater(len(unido), len(tono) * 2)
+
+    def test_extraer_inicios_desde_marcas_soporta_varias_oraciones_por_bloque(self) -> None:
+        frases = [
+            "Dos marcas sacan colección.",
+            "Una improvisa. La otra usa ficha.",
+            "No seas el Taller A. Sé el Taller B. Con El Socio, te lo solucionamos.",
+        ]
+        marcas = [
+            {"offset_seg": 0.0},
+            {"offset_seg": 2.0},
+            {"offset_seg": 3.5},
+            {"offset_seg": 5.2},
+            {"offset_seg": 6.4},
+            {"offset_seg": 7.6},
+        ]
+        inicios = voice_engine._extraer_inicios_desde_marcas(frases, marcas, 9.5)
+        self.assertEqual(len(inicios), 3)
+        self.assertAlmostEqual(inicios[0], round(voice_engine.INICIO_LOCUCION_SEG + 0.0, 3))
+        self.assertAlmostEqual(inicios[1], round(voice_engine.INICIO_LOCUCION_SEG + 2.0, 3))
+        self.assertAlmostEqual(inicios[2], round(voice_engine.INICIO_LOCUCION_SEG + 5.2, 3))
+
+
 
 # ----------------------------------------- 3. Cerebro Autónomo de Contenido
 
@@ -289,6 +382,41 @@ class TestCerebroContenido(BaseAutonoma):
         self.assertGreater(database.agent_cost_today_usd(), 0.0)
         pieza = database.get_content(int(res["id"]))
         self.assertEqual(pieza["estado"], "generado")
+
+    def test_storyboard_del_modelo_llega_a_la_cola_y_tooltip_con_cifra_se_autocorrige(self) -> None:
+        planos_sucios = [{}, {"foco": "audios", "tooltip": "Desde 50.000"}, {}, {}, {}]
+        planos_ok = [
+            {"toma": "pareja", "lado": "A"},
+            {"toma": "detalle", "lado": "A", "foco": "audios", "tooltip": "A ciegas"},
+            {"toma": "detalle", "lado": "B", "foco": "ficha", "tarjeta": "ficha"},
+            {"toma": "local", "lado": "B", "foco": "maquinas"},
+            {"toma": "pareja"},
+        ]
+        sucia = self._respuesta_pieza(planos=planos_sucios)
+        limpia = self._respuesta_pieza(planos=planos_ok)
+        with mock.patch.object(sales_agent, "llamar_api", side_effect=[sucia, limpia]) as api:
+            res = content_brain.CerebroContenido(dict(self.CFG)).crear_pieza_del_dia(renderizar=False)
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(api.call_count, 2)
+        pieza = database.get_content(int(res["id"]))
+        self.assertEqual(content_manager.leer_planos(pieza["nota"]), planos_ok)
+
+    def test_dos_reels_del_dia_no_salen_con_el_mismo_formato(self) -> None:
+        cfg = dict(self.CFG, CONTENT_MAX_DAILY_PIECES="2")
+        r1 = self._respuesta_pieza(formato="collage")
+        r2 = self._respuesta_pieza(
+            nicho="modelado-3d-espacios",
+            gancho="Uno de estos locales va a romper la pared equivocada.", formato="collage",
+        )
+        with mock.patch.object(sales_agent, "llamar_api", side_effect=[r1, r2]):
+            a = content_brain.CerebroContenido(cfg).crear_pieza_del_dia(renderizar=False)
+            b = content_brain.CerebroContenido(cfg).crear_pieza_del_dia(renderizar=False)
+        self.assertTrue(a["ok"] and b["ok"], (a, b))
+        fa = content_manager.leer_formato(database.get_content(int(a["id"]))["nota"])
+        fb = content_manager.leer_formato(database.get_content(int(b["id"]))["nota"])
+        self.assertEqual(fa, "collage")
+        self.assertNotEqual(fb, "collage")
+        self.assertIn(fb, content_manager.FORMATOS)
 
     def test_rechaza_ganchos_repetidos(self) -> None:
         repetido = "El patronista adivinó las medidas de tu colección."
@@ -526,6 +654,271 @@ class TestDryRunCLIReal(unittest.TestCase):
         self.assertIn("com.elsocio.cerebro", plists)
         self.assertIn("com.elsocio.panelserver", plists)
         self.assertIn("/usr/local/bin", plists["com.elsocio.cerebro"]["EnvironmentVariables"]["PATH"])
+
+
+# ----------------------------------------- 6. Nivel Visual/Sonoro + Mix Diario 5 Piezas + Stories
+
+class TestMixDiarioStoriesYReservaVentas(BaseAutonoma):
+    def test_diseno_sonoro_stdlib_y_cortes_menores_a_3s(self) -> None:
+        # Un bloque largo de 6.0 s debe partirse solo en sub-cortes < 2.6 s
+        cortes = voice_engine.calcular_cortes_visuales([2.2, 8.2], 10.5, 13.5)
+        puntos = [0.0, *cortes, 13.5]
+        saltos = [puntos[i + 1] - puntos[i] for i in range(len(puntos) - 1)]
+        self.assertLessEqual(max(saltos), 2.6, f"hubo plano estático > 2.6s: {saltos}")
+
+        wav_out = self.tmp_dir / "cama_sfx.wav"
+        voice_engine.generar_diseno_sonoro_wav(wav_out, 6.0, [2.1, 4.2], 4.8)
+        self.assertTrue(wav_out.exists())
+        self.assertGreater(wav_out.stat().st_size, 24000 * 6 * 2)
+
+    def test_mix_por_defecto_es_2_videos_1_post_2_historias_1_carrusel_intercalados(self) -> None:
+        conf = content_brain.leer_config_contenido({"ANTHROPIC_API_KEY": "k"})
+        self.assertEqual(conf["max_videos"], 2)
+        self.assertEqual(conf["max_posts"], 1)
+        self.assertEqual(conf["max_historias"], 2)
+        self.assertEqual(conf["max_carruseles"], 1)
+        self.assertEqual(conf["max_piezas"], 6)
+        faltantes = content_brain.calcular_faltantes_hoy(conf)
+        self.assertEqual(faltantes, ["video", "historia", "post", "carrusel", "video", "historia"])
+
+    def test_reserva_de_saldo_protege_a_ventas_antes_del_tope_de_050(self) -> None:
+        # Con 0.36 USD gastados de 0.50 USD, el último colchón (0.15 USD) queda blindado para ventas.
+        database.log_agent_action(
+            lead_id=2, turno=1, modelo="claude-sonnet-5",
+            herramienta="llamada_api", costo_usd=0.36,
+        )
+        cfg = {
+            "ANTHROPIC_API_KEY": "clave-falsa",
+            "SALES_AGENT_MAX_DAILY_USD": "0.50",
+        }
+        with mock.patch.object(sales_agent, "llamar_api",
+                               side_effect=AssertionError("invadió la reserva de ventas")) as api:
+            res = content_brain.CerebroContenido(cfg).planear_y_crear_lote_diario()
+        self.assertFalse(res["ok"])
+        self.assertIn("Reserva de saldo protegida para ventas", res["motivo"])
+        self.assertIn("Vender va primero", res["motivo"])
+        self.assertEqual(api.call_count, 0)
+
+    def test_planear_lote_diario_crea_5_piezas_en_una_sola_llamada_y_dosifica_renders(self) -> None:
+        lote_5 = [
+            {
+                "tipo": "video",
+                "nicho": "modelado-3d-espacios",
+                "gancho": "Dos locales abren en la misma cuadra.",
+                "bloques": [
+                    "Uno improvisó la obra sobre la marcha.",
+                    "Tuvo que tumbar muros ya pintados.",
+                    "El otro vio el espacio exacto antes de empezar.",
+                    "Entregó su plano y sus referencias.",
+                    "Ajustó luces y circulación en pantalla.",
+                    "Abrió sin sorpresas ni reprocesos.",
+                ],
+                "cierre": "Cuéntanos tu problema · link en bio",
+                "caption": "Ver tu espacio resuelto antes de construir evita errores caros.",
+                "escena": "espacio3d",
+                "etiquetas": ["IMPROVISADO", "VISTA REAL", "APROBADO"],
+            },
+            {
+                "tipo": "historia",
+                "nicho": "automatizacion-agencias-estudios",
+                "gancho": "Tu equipo sigue copiando reportes a mano.",
+                "bloques": ["Ese trabajo repetitivo lo hace un sistema mientras vendes."],
+                "cierre": "Responde esta historia con tu caso",
+                "caption": "Responde esta historia con tu caso",
+                "escena": "flujo",
+                "etiquetas": ["MANUAL", "AUTOMÁTICO"],
+            },
+            {
+                "tipo": "post",
+                "nicho": "general",
+                "gancho": "El cuello de botella de tu negocio es resolverlo todo tú solo.",
+                "bloques": [],
+                "cierre": "Cuéntanos tu problema · link en bio",
+                "caption": "Delega la ejecución pesada con criterio.",
+                "escena": "contraste",
+                "etiquetas": ["SOLO", "CON SOCIO"],
+            },
+            {
+                "tipo": "video",
+                "nicho": "fichas-tecnicas-ropa",
+                "gancho": "Mandar a coser por audio siempre termina en discusión.",
+                "bloques": [
+                    "El taller interpreta costuras como puede.",
+                    "La muestra llega con otro calce.",
+                    "Con plano técnico nadie adivina.",
+                    "Nos pasas tu boceto o prenda guía.",
+                    "Dejamos costuras y avíos especificados.",
+                    "El taller produce exacto lo que imaginaste.",
+                ],
+                "cierre": "Cuéntanos tu problema · link en bio",
+                "caption": "Producción textil clara desde el inicio.",
+                "escena": "contraste",
+                "etiquetas": ["POR AUDIO", "PLANO CLARO", "EXACTO"],
+            },
+            {
+                "tipo": "carrusel",
+                "nicho": "fichas-tecnicas-ropa",
+                "gancho": "Tu taller no se equivoca: le estás mandando audios.",
+                "bloques": [
+                    "Cada colección arranca con notas de voz, fotos borrosas y medidas al ojo.",
+                    "El patronista adivina, la muestra sale mal y toca repetirla.",
+                    "Con una ficha técnica clara nadie adivina medidas ni costuras.",
+                    "Tu lote sale igual a lo que imaginaste desde la primera muestra.",
+                ],
+                "cierre": "Escríbenos tu caso por mensaje directo",
+                "caption": "Guárdalo para tu próxima colección.",
+                "escena": "contraste",
+                "etiquetas": ["AUDIOS", "FICHA"],
+            },
+            {
+                "tipo": "historia",
+                "nicho": "ecommerce-catalogo-visual",
+                "gancho": "Buen producto con foto floja parece barato.",
+                "bloques": ["Elevamos tu catálogo visual sin montar estudio físico."],
+                "cierre": "Responde esta historia con tu caso",
+                "caption": "Responde esta historia con tu caso",
+                "escena": "contraste",
+                "etiquetas": ["FOTO FLOJA", "CATÁLOGO PRO"],
+            },
+        ]
+        respuesta_api = {
+            "stop_reason": "tool_use",
+            "content": [{"type": "tool_use", "id": "plan_1", "name": "proponer_plan_diario",
+                         "input": {"piezas": lote_5}}],
+            "usage": {"input_tokens": 4500, "output_tokens": 900, "cache_creation_input_tokens": 4000},
+        }
+        cfg = {"ANTHROPIC_API_KEY": "clave-falsa", "SALES_AGENT_MAX_DAILY_USD": "0.50"}
+        with mock.patch.object(sales_agent, "llamar_api", return_value=respuesta_api) as api:
+            res = content_brain.CerebroContenido(cfg).planear_y_crear_lote_diario(max_renders_video=1)
+
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(api.call_count, 1, "debe planear las 6 piezas en una sola llamada")
+        self.assertEqual(res["creadas"], 6)
+        self.assertEqual(database.content_created_today_by_tipo(),
+                         {"post": 1, "video": 2, "historia": 2, "carrusel": 1})
+        # Primer latido: las rápidas (1 post + 2 historias + 1 carrusel) + 1 video = 5; el 2do video queda aprobado
+        self.assertEqual(len(res["renderizadas"]), 5)
+        self.assertEqual(database.count_content_by_estado(), {"generado": 5, "aprobado": 1})
+        carrusel = [p for p in database.list_content(limit=10) if p["tipo"] == "carrusel"][0]
+        self.assertTrue(carrusel["archivo"].endswith("_01.png"))
+        self.assertEqual(
+            content_manager.laminas_carrusel(carrusel["gancho"], carrusel["guion"])[-1],
+            "Escríbenos tu caso por mensaje directo",
+        )
+
+        # Segundo latido: 0 llamadas a la API, renderiza el video restante gratis
+        with mock.patch.object(sales_agent, "llamar_api", side_effect=AssertionError("no debe llamar API")):
+            res2 = content_brain.CerebroContenido(cfg).planear_y_crear_lote_diario(max_renders_video=1)
+        self.assertTrue(res2["ok"])
+        self.assertEqual(res2["creadas"], 0)
+        self.assertEqual(len(res2["renderizadas_pendientes"]), 1)
+        self.assertEqual(database.count_content_by_estado(), {"generado": 6})
+
+    def test_carrusel_con_pocas_laminas_o_cifras_se_rechaza(self) -> None:
+        cerebro = content_brain.CerebroContenido({"ANTHROPIC_API_KEY": "k"})
+        base = {
+            "tipo": "carrusel", "nicho": "general", "gancho": "Lo que haces a mano te roba la semana.",
+            "bloques": ["Copias datos de un lado a otro."], "cierre": "Escríbenos tu caso",
+            "caption": "Guárdalo.", "escena": "flujo", "etiquetas": [],
+        }
+        ok, motivo = cerebro._validar_propuesta(base, set())
+        self.assertFalse(ok)
+        self.assertIn("láminas", str(motivo))
+        base["bloques"] = ["Copias datos a mano.", "Pierdes la tarde.", "Desde $50.000 lo resolvemos."]
+        ok, _ = cerebro._validar_propuesta(base, set())
+        self.assertFalse(ok, "un precio dentro de una lámina no puede salir")
+
+    def test_carrusel_se_publica_como_carousel_oficial_con_laminas_hijas(self) -> None:
+        carpeta = self.tmp_dir / "carruseles"
+        carpeta.mkdir()
+        for i in range(1, 5):
+            (carpeta / f"content_0042_{i:02d}.png").write_bytes(b"png-falso")
+        cid = content_manager.encolar(
+            tipo="carrusel",
+            gancho="Tu taller no se equivoca: le estás mandando audios.",
+            guion="Notas de voz y fotos borrosas.\nLa muestra sale mal.\nEscríbenos tu caso",
+            caption="Guárdalo para tu próxima colección.",
+        )["id"]
+        database.update_content(cid, estado="generado", archivo=str(carpeta / "content_0042_01.png"))
+
+        def simular_sips(cmd, **kwargs):
+            Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xe0jpeg")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        cfg_ig = {"IG_USER_ID": "17841400000000000", "IG_ACCESS_TOKEN": "IGAAtok", "IG_AUTO_PUBLISH": "1"}
+        respuestas = [{"id": f"hijo_{i}"} for i in range(4)] + [{"id": "padre"}, {"id": "ig_carrusel_1"}]
+        with mock.patch.object(ig_publisher.subprocess, "run", side_effect=simular_sips), \
+             mock.patch.object(ig_publisher, "obtener_url_publica_https",
+                               return_value="https://files.ejemplo.com/lamina.jpg") as m_url, \
+             mock.patch.object(ig_publisher, "_graph_post", side_effect=respuestas) as m_post, \
+             mock.patch.object(ig_publisher, "_graph_get", return_value={"status_code": "FINISHED"}):
+            res = ig_publisher.publicar_pieza_ig(cid, cfg=dict(cfg_ig))
+
+        self.assertTrue(res["publicado"], res)
+        self.assertEqual(m_url.call_count, 4)
+        for llamada in m_post.call_args_list[:4]:
+            self.assertEqual(llamada.args[1]["is_carousel_item"], "true")
+        padre = m_post.call_args_list[4].args[1]
+        self.assertEqual(padre["media_type"], "CAROUSEL")
+        self.assertEqual(padre["children"], "hijo_0,hijo_1,hijo_2,hijo_3")
+        self.assertIn("caption", padre)
+        self.assertEqual(m_post.call_args_list[5].args[1], {"creation_id": "padre"})
+
+    def test_historia_oficial_meta_usa_media_type_stories_y_respeta_pausa_y_topes(self) -> None:
+        png = self.tmp_dir / "historia.png"
+        png.write_bytes(b"png-falso")
+        cid = content_manager.encolar(
+            tipo="historia",
+            gancho="Lo que no automatizas te quita el fin de semana.",
+            guion="Hablemos de tu flujo actual.",
+            caption="Responde esta historia con tu caso",
+        )["id"]
+        database.update_content(cid, estado="generado", archivo=str(png))
+
+        def simular_sips(cmd, **kwargs):
+            Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xe0jpeg")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        cfg_ig = {
+            "IG_USER_ID": "17841400000000000",
+            "IG_ACCESS_TOKEN": "IGAAtokenStoriesOficial",
+            "IG_AUTO_PUBLISH": "1",
+        }
+        with mock.patch.object(ig_publisher.subprocess, "run", side_effect=simular_sips), \
+             mock.patch.object(ig_publisher, "obtener_url_publica_https",
+                               return_value="https://files.ejemplo.com/historia.jpg"), \
+             mock.patch.object(ig_publisher, "_graph_post",
+                               side_effect=[{"id": "cont_story_1"}, {"id": "ig_story_999"}]) as m_post, \
+             mock.patch.object(ig_publisher, "_graph_get",
+                               return_value={"status_code": "FINISHED"}):
+            res = ig_publisher.publicar_pieza_ig(cid, cfg=dict(cfg_ig))
+
+        self.assertTrue(res["publicado"], res)
+        params_enviados = m_post.call_args_list[0].args[1]
+        self.assertEqual(params_enviados["media_type"], "STORIES")
+        self.assertIn("image_url", params_enviados)
+        self.assertNotIn("caption", params_enviados, "STORIES oficial no lleva caption de feed")
+        self.assertNotIn("share_to_feed", params_enviados)
+
+        # Si hay otra pieza lista 1 minuto después con pausa orgánica activa (75 min por defecto), espera
+        otra_png = self.tmp_dir / "post.png"
+        otra_png.write_bytes(b"png-falso")
+        cid2 = content_manager.encolar(tipo="post", gancho="Otra verdad limpia de socio.")["id"]
+        database.update_content(cid2, estado="generado", archivo=str(otra_png))
+        ciclo_inmediato = ig_publisher.ciclo_publicacion_autonoma(cfg=dict(cfg_ig))
+        self.assertFalse(ciclo_inmediato["ejecutado"])
+        self.assertEqual(ciclo_inmediato["razon"], "pausa_organica_entre_publicaciones")
+
+        # Y sincronizar_resultados_ig no inventa silencio sobre historias de 24h
+        hace_10_dias = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+        with sqlite3.connect(self.db) as con:
+            con.execute("UPDATE content_queue SET published_at=? WHERE id=?", (hace_10_dias, cid))
+        with mock.patch.object(ig_publisher, "_graph_get",
+                               side_effect=AssertionError("no debe pedir comments_count de STORIES")):
+            sync_st = ig_publisher.sincronizar_resultados_ig(
+                cfg=dict(cfg_ig), ruta_resultados=self.resultados,
+            )
+        self.assertEqual(sync_st["registradas"], 0)
 
 
 if __name__ == "__main__":

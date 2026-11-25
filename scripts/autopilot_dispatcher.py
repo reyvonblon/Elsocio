@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timedelta
 from email.header import decode_header
 from email.message import EmailMessage
+from email.utils import formataddr
 from email.utils import parseaddr
 from pathlib import Path
 
@@ -243,79 +244,195 @@ def get_autopilot_status() -> dict[str, object]:
     }
 
 
+_RE_DESPEDIDA_SOLA = re.compile(
+    r"^(?:un\s+saludo|saludos(?:\s+cordiales)?|cordialmente|atentamente|abrazo|un\s+abrazo|"
+    r"quedo\s+atento|quedo\s+pendiente|gracias(?:\s+de\s+antemano)?|mil\s+gracias|feliz\s+(?:d[ií]a|tarde|semana))[,!.\s]*$",
+    re.IGNORECASE,
+)
+_RE_FIRMA_PROPIA = re.compile(
+    r"^(?:--\s*|—\s*)?(?:raymond(?:\s+vonblon)?|el\s+socio|equipo(?:\s+de)?\s+el\s+socio|"
+    r"raymond(?:\s+vonblon)?\s*[-·—]\s*el\s+socio)[.\s]*$",
+    re.IGNORECASE,
+)
+_RE_PARRAFO_BAJA = re.compile(
+    r"(?:no\s+quier(?:es|en|as)\s+recibir|no\s+dese(?:as|an)\s+recibir|"
+    r"prefier(?:es|en)\s+no\s+recibir|no\s+(?:te|les)\s+interesa\s+recibir|"
+    r"para\s+no\s+recibir\s+m[aá]s|si\s+no\s+(?:te|les)\s+interesa.*(?:escrib|baja)|"
+    r"respond(?:e|eme|an|ame)\s+(?:con\s+)?(?:la\s+palabra\s+)?[\"']?baja[\"']?|"
+    r"dar(?:te|se)?\s+de\s+baja|desuscribir|saco\s+de\s+la\s+lista|"
+    r"no\s+(?:te|les)\s+vuelvo\s+a\s+escribir|no\s+(?:te|les)\s+escribo\s+(?:m[aá]s|de\s+nuevo))",
+    re.IGNORECASE,
+)
+
+
+def limpiar_cuerpo_correo(body: str) -> tuple[str, str]:
+    """Limpia espacios excesivos, quita firmas duplicadas y separa una única línea de baja.
+
+    Devuelve `(cuerpo_limpio, linea_baja)`. Así el correo sale compacto, natural y nunca
+    repite despedidas ni avisos de baja.
+    """
+    normalizado = (body or "").replace("\r\n", "\n").replace("\r", "\n")
+    lineas_raw = [ln.rstrip() for ln in normalizado.split("\n")]
+    texto = re.sub(r"\n{3,}", "\n\n", "\n".join(lineas_raw)).strip()
+    if not texto:
+        return "", ""
+
+    bloques = [b.strip() for b in re.split(r"\n\s*\n", texto) if b.strip()]
+    linea_baja = ""
+    filtrados: list[str] = []
+
+    for bloque in bloques:
+        # Si el bloque completo es una línea de baja, se reserva solo la primera (evita duplicados).
+        if len(bloque) <= 220 and _RE_PARRAFO_BAJA.search(bloque):
+            if not linea_baja:
+                linea_baja = re.sub(r"\s+", " ", bloque).strip()
+            continue
+        filtrados.append(bloque)
+
+    # Quita cierres/firmas redundantes al final que el modelo haya escrito por su cuenta.
+    while filtrados:
+        ultimo_lineas = [ln.strip() for ln in filtrados[-1].splitlines() if ln.strip()]
+        if ultimo_lineas and all(
+            _RE_DESPEDIDA_SOLA.match(ln) or _RE_FIRMA_PROPIA.match(ln)
+            for ln in ultimo_lineas
+        ):
+            filtrados.pop()
+            continue
+        # Si el último bloque termina en una línea suelta de despedida/firma, recorta esa línea.
+        recortadas = list(ultimo_lineas)
+        while len(recortadas) > 1 and (
+            _RE_DESPEDIDA_SOLA.match(recortadas[-1]) or _RE_FIRMA_PROPIA.match(recortadas[-1])
+        ):
+            recortadas.pop()
+        filtrados[-1] = "\n".join(recortadas)
+        break
+
+    cuerpo_limpio = "\n\n".join(filtrados).strip()
+    return cuerpo_limpio, linea_baja
+
+
 def build_signature(cfg: dict[str, str]) -> str:
-    name = cfg.get("FROM_NAME", "Raymond Vonblon — El Socio")
+    name = cfg.get("FROM_NAME") or "Raymond Vonblon · El Socio"
     whatsapp = cfg.get("WHATSAPP") or "+57 304 609 0036"
     website = cfg.get("WEBSITE") or "https://reyvonblon.github.io/Elsocio/"
-    lines = [f"\n\nSaludos,\n{name}", f"WhatsApp: {whatsapp}", website]
-    return "\n".join(lines)
+    site_label = re.sub(r"^https?://", "", website).rstrip("/")
+    return f"--\n{name}\nMedellín · WhatsApp {whatsapp} · {site_label}"
 
 
-def build_html_signature(cfg: dict[str, str]) -> str:
+LOGO_FIRMA_PATH = Path(__file__).resolve().parent.parent / "docs" / "assets" / "logo-firma.png"
+LOGO_CID = "logoelsocio"
+
+
+def usar_logo_en_firma(cfg: dict[str, str]) -> bool:
+    """¿Va el logo en el correo? Por defecto NO en el primer contacto frío.
+
+    Un correo frío con imagen de marca se parece a un boletín y Gmail lo manda a la
+    pestaña Promociones, donde nadie lo abre. El logo se activa con EMAIL_LOGO=1 o
+    cuando ya hay conversación (ahí sí suma y Gmail ya lo tiene en Principal).
+    """
+    return (cfg.get("EMAIL_LOGO") or "0").strip() not in ("", "0", "no", "false")
+
+
+def build_html_signature(cfg: dict[str, str], *, con_logo: bool = False) -> str:
+    """Firma minimalista y 100% fluida: se ve como un correo humano y nunca rompe el celular."""
     whatsapp_display = cfg.get("WHATSAPP") or "+57 304 609 0036"
     whatsapp_digits = re.sub(r"\D", "", whatsapp_display)
     if len(whatsapp_digits) == 10:
         whatsapp_digits = f"57{whatsapp_digits}"
     website = cfg.get("WEBSITE") or "https://reyvonblon.github.io/Elsocio/"
-    email_addr = cfg.get("SMTP_USER") or "elsociotuia@gmail.com"
-    logo_url = website.rstrip("/") + "/assets/logo-firma.png"
+    site_label = re.sub(r"^https?://", "", website).rstrip("/")
+    logo_html = ""
+    if con_logo and LOGO_FIRMA_PATH.exists():
+        logo_html = (
+            f'<div style="margin:0 0 8px 0;"><img src="cid:{LOGO_CID}" alt="El Socio" '
+            'width="140" style="width:140px; max-width:60%; height:auto; display:block;" /></div>'
+        )
     return (
-        '<table cellpadding="0" cellspacing="0" border="0" width="520" '
-        'style="border-collapse:collapse; font-family:Verdana, Geneva, sans-serif; color:#0a0a0a; font-size:13px; max-width:100%; margin-top:18px;">'
-        "<tbody><tr>"
-        '<td valign="middle" style="padding:0 16px 0 0; width:165px;">'
-        f'<a href="{html.escape(website)}" target="_blank" style="text-decoration:none; display:block;">'
-        f'<img src="{html.escape(logo_url)}" width="150" alt="El Socio" '
-        'style="display:block; width:150px; height:auto; border-radius:10px; border:0; background:#0a0a0a;" />'
-        "</a></td>"
-        '<td valign="top" style="border-left:2px solid #9c1c2e; padding:2px 0 2px 16px; line-height:1.4;">'
-        '<table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;"><tbody>'
-        '<tr><td style="padding:0 0 2px 0;">'
-        '<span style="font-size:17px; font-weight:700; color:#0a0a0a; letter-spacing:-0.2px;">Raymond Vonblon</span>'
-        "</td></tr>"
-        '<tr><td style="padding:0 0 8px 0; font-size:12.5px; color:#3f3f46; line-height:1.45;">'
-        'Fundador &middot; <strong style="color:#0a0a0a;">El Socio</strong> | Producci&oacute;n Visual &amp; Automatizaci&oacute;n<br />'
-        '<span style="color:#52525b;">&#x1F1E8;&#x1F1F4; Sabaneta &middot; Medell&iacute;n, Colombia</span>'
-        "</td></tr>"
-        '<tr><td style="padding:0 0 2px 0; font-size:12.5px;">'
-        f'<a href="https://wa.me/{whatsapp_digits}" target="_blank" style="color:#0a0a0a; text-decoration:none; font-weight:600;">{html.escape(whatsapp_display)}</a>'
-        '<span style="color:#a1a1aa;"> &middot; </span>'
-        f'<a href="mailto:{html.escape(email_addr)}" style="color:#0a0a0a; text-decoration:none;">{html.escape(email_addr)}</a>'
-        "</td></tr>"
-        '<tr><td style="padding:9px 0 0 0;">'
-        '<table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;"><tbody><tr>'
-        '<td style="padding:0 6px 0 0;">'
-        f'<a href="https://wa.me/{whatsapp_digits}" target="_blank" '
-        'style="display:inline-block; background:#0a0a0a; color:#ffffff; font-size:11px; font-weight:700; text-decoration:none; padding:5px 10px; border-radius:6px; font-family:Verdana, Geneva, sans-serif;">WhatsApp</a>'
-        "</td>"
-        '<td style="padding:0;">'
-        f'<a href="{html.escape(website)}" target="_blank" '
-        'style="display:inline-block; background:#9c1c2e; color:#ffffff; font-size:11px; font-weight:700; text-decoration:none; padding:5px 10px; border-radius:6px; font-family:Verdana, Geneva, sans-serif;">Sitio Web</a>'
-        "</td>"
-        "</tr></tbody></table>"
-        "</td></tr>"
-        "</tbody></table>"
-        "</td></tr></tbody></table>"
+        '<div style="margin-top:14px; padding-top:10px; border-top:1px solid #e4e4e7; '
+        'font-size:13px; line-height:1.45; color:#52525b; max-width:100%;">'
+        f'{logo_html}'
+        '<div style="font-weight:600; color:#18181b;">Raymond Vonblon &middot; El Socio</div>'
+        '<div>Medell&iacute;n &middot; '
+        f'<a href="https://wa.me/{whatsapp_digits}" style="color:#18181b; text-decoration:none;">'
+        f'WhatsApp {html.escape(whatsapp_display)}</a> &middot; '
+        f'<a href="{html.escape(website)}" style="color:#9c1c2e; text-decoration:none;">'
+        f'{html.escape(site_label)}</a></div>'
+        "</div>"
     )
 
 
-def send_smtp_email(cfg: dict[str, str], to_addr: str, subject: str, body: str, *, include_signature: bool = True) -> None:
+def build_email_parts(
+    cfg: dict[str, str], body: str, *, include_signature: bool = True, con_logo: bool | None = None,
+) -> tuple[str, str]:
+    """Construye `(texto_plano, html_fluido)` limpios, compactos y adaptables a cualquier pantalla."""
+    cuerpo_limpio, linea_baja = limpiar_cuerpo_correo(body)
+    if not cuerpo_limpio:
+        cuerpo_limpio = (body or "").strip()
+
+    partes_txt = [cuerpo_limpio]
+    if include_signature:
+        partes_txt.append(build_signature(cfg))
+    if linea_baja:
+        partes_txt.append(linea_baja)
+    full_plain = "\n\n".join(p for p in partes_txt if p)
+
+    parrafos_html: list[str] = []
+    bloques = [b.strip() for b in re.split(r"\n\s*\n", cuerpo_limpio) if b.strip()]
+    for idx, bloque in enumerate(bloques):
+        margin_bottom = "0" if (idx == len(bloques) - 1 and not include_signature and not linea_baja) else "11px"
+        contenido = "<br />".join(html.escape(ln) for ln in bloque.splitlines())
+        parrafos_html.append(f'<p style="margin:0 0 {margin_bottom} 0;">{contenido}</p>')
+
+    baja_html = ""
+    if linea_baja:
+        baja_html = (
+            '<p style="margin:12px 0 0 0; font-size:11.5px; line-height:1.4; color:#71717a;">'
+            f"{html.escape(linea_baja)}</p>"
+        )
+
+    if con_logo is None:
+        con_logo = usar_logo_en_firma(cfg)
+    sig_html = build_html_signature(cfg, con_logo=con_logo) if include_signature else ""
+    html_doc = (
+        '<!DOCTYPE html><html lang="es"><head>'
+        '<meta charset="UTF-8" />'
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'
+        "</head>"
+        '<body style="margin:0; padding:0; font-family:-apple-system, BlinkMacSystemFont, '
+        "'Segoe UI', Roboto, Arial, sans-serif; font-size:14px; color:#18181b; line-height:1.5;\">"
+        '<div style="max-width:600px; margin:0; padding:0; word-wrap:break-word; '
+        'overflow-wrap:break-word;">'
+        f'{"".join(parrafos_html)}{sig_html}{baja_html}'
+        "</div></body></html>"
+    )
+    return full_plain, html_doc
+
+
+def send_smtp_email(
+    cfg: dict[str, str], to_addr: str, subject: str, body: str, *,
+    include_signature: bool = True, con_logo: bool | None = None,
+) -> None:
     msg = EmailMessage()
-    msg["From"] = cfg.get("SMTP_FROM") or cfg["SMTP_USER"]
+    nombre_from = (cfg.get("FROM_NAME") or "").strip()
+    correo_from = cfg.get("SMTP_FROM") or cfg["SMTP_USER"]
+    msg["From"] = formataddr((nombre_from, correo_from)) if nombre_from else correo_from
     msg["To"] = to_addr
     msg["Subject"] = subject
-    full_body = body + (build_signature(cfg) if include_signature else "")
-    msg.set_content(full_body)
-
+    if con_logo is None:
+        con_logo = usar_logo_en_firma(cfg)
+    full_plain, html_doc = build_email_parts(
+        cfg, body, include_signature=include_signature, con_logo=con_logo,
+    )
+    msg.set_content(full_plain)
     if include_signature:
-        body_html = "<br />".join(html.escape(line) for line in body.splitlines())
-        html_doc = (
-            '<!DOCTYPE html><html lang="es"><body style="margin:0; padding:0; font-family:Verdana, Geneva, sans-serif; font-size:14px; color:#18181b; line-height:1.55;">'
-            f"<div>{body_html}</div>"
-            f"{build_html_signature(cfg)}"
-            "</body></html>"
-        )
         msg.add_alternative(html_doc, subtype="html")
+        if con_logo and LOGO_FIRMA_PATH.exists():
+            # El logo viaja incrustado (cid:) y no como enlace externo: así se ve aunque el
+            # cliente bloquee imágenes remotas, y no delata rastreo.
+            msg.get_payload()[-1].add_related(
+                LOGO_FIRMA_PATH.read_bytes(), maintype="image", subtype="png",
+                cid=f"<{LOGO_CID}>", filename="el-socio.png",
+            )
 
     port = int(cfg.get("SMTP_PORT") or "587")
     host = cfg["SMTP_HOST"]
@@ -379,7 +496,8 @@ def ensure_daily_pipeline(*, force: bool = False) -> dict[str, object]:
                 name=row["nombre"], company=row["empresa"], email=row["correo"],
                 whatsapp=row.get("whatsapp", ""), nicho=row.get("nicho", ""),
                 service_interest=row.get("servicio", ""), source="prospeccion_auto",
-                stage="nuevo_lead", notes="Descubierto y verificado (MX OK) por El Socio",
+                stage="nuevo_lead", notes="Descubierto, analizado y verificado (MX OK) por El Socio",
+                website=row.get("website", ""), dossier=row.get("dossier", ""),
             )
             added_discovered += 1
             deficit -= 1
@@ -389,10 +507,12 @@ def ensure_daily_pipeline(*, force: bool = False) -> dict[str, object]:
     if deficit > 0 and settings.get("autopilot_reengage_enabled", "1") != "0":
         candidates = database.list_reengagement_candidates(limit=min(deficit, 3))
         for cand in candidates:
-            subject = f"Seguimiento — {cand.get('service_interest') or 'una idea para ti'}"
+            marca = (cand.get("company") or "").strip()
+            subject = f"retomando por {marca}" if marca and len(marca) <= 30 else "retomando mi correo anterior"
             body = (
-                f"Hola, te escribí hace un tiempo sobre {cand.get('service_interest') or 'un servicio'}. "
-                "Sigo disponible si te interesa retomarlo."
+                "Hola, paso rápido por aquí por si en este momento sí les viene bien revisar lo que te "
+                "comenté hace unas semanas.\n\n"
+                "Si no es prioridad ahorita, sin problema; y si prefieres que no vuelva a escribir, respóndeme BAJA."
             )
             if database.queue_prudent_reengagement(cand, subject, body):
                 added_reengaged += 1
@@ -489,8 +609,10 @@ def dispatch_due_jobs(*, respect_pacing: bool = False, respect_window: bool = Fa
                     database.mark_lead_bounced(job["recipient"], str(exc)[:200])
                     bounced_count += 1
                     try:
+                        estilo_job = (job.get("estilo") or "").strip()
+                        angulo_rebote = f"modelo:{estilo_job}" if estilo_job else "(rebote, ángulo no registrado)"
                         registrar_resultado_mercado(
-                            job.get("nicho") or "(sin nicho)", "(rebote, ángulo no registrado)",
+                            job.get("nicho") or "(sin nicho)", angulo_rebote,
                             "correo", 1, "rebote",
                             f"Rebote real de {job['recipient']}: {str(exc)[:120]}",
                         )
@@ -612,22 +734,112 @@ def create_calendar_event(summary: str, notes: str, start_dt: datetime, calendar
         return False
 
 
-def classify_reply_intent(subject: str, body: str, headers: dict[str, str] | None = None) -> str:
-    hdrs = {k.lower(): (v or "").lower() for k, v in (headers or {}).items()}
-    if (hdrs.get("auto-submitted") and hdrs.get("auto-submitted") != "no") or hdrs.get("precedence") in ("bulk", "auto_reply", "junk"):
-        return "respuesta_automatica"
+_PREFIJOS_REMITENTE_AUTOMATICO = (
+    "noreply", "no-reply", "no_reply", "donotreply", "do-not-reply", "mailer-daemon",
+    "postmaster", "notifications", "notificaciones", "automated", "autoreply",
+    "auto-reply", "bounce", "daemon", "security", "verify", "verification", "auth",
+)
+
+_AUTO_REPLY_PHRASES = (
+    # Form submitted / confirmaciones automáticas de formularios (EN/ES)
+    "form submitted", "form submission", "new form submission", "submission received",
+    "thank you for your submission", "thanks for your submission",
+    "formulario enviado", "formulario recibido", "envío de formulario", "envio de formulario",
+    "su formulario ha sido", "tu formulario ha sido",
+    # Confirmaciones automáticas de recepción / CRM / helpdesk
+    "gracias por contactarnos", "gracias por escribirnos", "gracias por tu mensaje",
+    "gracias por comunicarte", "gracias por contactarte", "thank you for contacting",
+    "thanks for reaching out", "we received your message", "we have received your",
+    "hemos recibido tu mensaje", "hemos recibido tu correo", "hemos recibido tu solicitud",
+    "recibimos tu mensaje", "recibimos tu correo", "recibimos tu solicitud",
+    "tu solicitud ha sido recibida", "tu mensaje ha sido recibido",
+    "pronto nos pondremos en contacto", "nos pondremos en contacto contigo",
+    "en breve nos comunicaremos", "un asesor se comunicará", "un asesor se comunicara",
+    # Autorrespuestas explícitas / fuera de oficina / rebotes
+    "respuesta automática", "respuesta automatica", "autorrespuesta", "auto-respuesta",
+    "correo automático", "correo automatico", "mensaje automático", "mensaje automatico",
+    "este es un correo automático", "este es un correo automatico",
+    "no responda a este correo", "no responder a este correo", "por favor no responda",
+    "please do not reply", "do not reply", "no-reply", "noreply",
+    "automated message", "automated response", "automatic reply", "auto-reply", "autoreply",
+    "auto-generated", "autogenerado", "fuera de oficina", "out of office",
+    "ausente de la oficina", "delivery status notification", "mail delivery subsystem",
+    "undeliverable", "failure notice", "returned mail",
+    # Tickets / mesas de ayuda
+    "ticket", "radicado", "número de caso", "numero de caso", "case #", "request #",
+    "solicitud #", "mesa de ayuda", "service desk",
+    # Tokens, códigos de verificación, autenticación y alertas de cuenta
+    "access token", "refresh token", "api token", "verification token", "reset token",
+    "auth token", "token de acceso", "token de verificación", "token de verificacion",
+    "tu token", "your token", "código de verificación", "codigo de verificacion",
+    "verification code", "security code", "código de seguridad", "codigo de seguridad",
+    "one-time password", "restablecer contraseña", "restablecer contrasena",
+    "reset your password", "confirmar tu correo", "verify your email", "confirma tu cuenta",
+    "confirm your email", "magic link", "enlace de acceso", "alerta de seguridad",
+    "login alert", "new sign-in", "nuevo inicio de sesión", "nuevo inicio de sesion",
+)
+
+_RE_TOKEN_O_OTP = re.compile(
+    r"\b(?:tokens?|otp|2fa|two-factor|doble\s+factor|api\s+key|access\s+key|web3forms)\b",
+    re.IGNORECASE,
+)
+
+
+def es_correo_automatico(
+    subject: str,
+    body: str,
+    headers: dict[str, str] | None = None,
+    sender_email: str = "",
+) -> bool:
+    """True si el correo es autorrespuesta, confirmación `Form Submitted`, token o alerta de sistema.
+
+    Estos correos NUNCA son leads ni ventas: no disparan notificaciones, Calendar ni saldo de IA.
+    """
+    hdrs = {k.lower(): (v or "").strip().lower() for k, v in (headers or {}).items()}
+    if hdrs.get("auto-submitted") and hdrs.get("auto-submitted") != "no":
+        return True
+    if hdrs.get("precedence") in ("bulk", "auto_reply", "junk", "list"):
+        return True
+    if hdrs.get("x-autoreply") in ("yes", "true", "1") or hdrs.get("x-autorespond"):
+        return True
+    if hdrs.get("x-auto-response-suppress") or hdrs.get("auto-response-suppress"):
+        return True
+    if hdrs.get("x-zendesk-ticket-id") or hdrs.get("x-freshdesk-ticket"):
+        return True
+    if hdrs.get("return-path") == "<>":
+        return True
+
+    remitente = (sender_email or "").strip().lower()
+    if remitente and "@" in remitente:
+        local = remitente.split("@", 1)[0]
+        if any(
+            local == p or local.startswith(p + ".") or local.startswith(p + "-") or local.startswith(p + "_")
+            for p in _PREFIJOS_REMITENTE_AUTOMATICO
+        ):
+            return True
 
     clean_body = _strip_quoted_reply(body).lower()
     clean_subj = re.sub(r"^(re|fwd|rv):\s*", "", (subject or "").strip(), flags=re.IGNORECASE).lower()
     combined = f"{clean_subj} {clean_body}"
 
-    auto_reply_kw = (
-        "ticket", "fuera de oficina", "out of office", "respuesta automática",
-        "respuesta automatica", "auto-reply", "autoreply", "gracias por contactarnos",
-        "no-reply", "noreply", "do not reply",
-    )
-    if any(kw in combined for kw in auto_reply_kw):
+    if any(kw in combined for kw in _AUTO_REPLY_PHRASES):
+        return True
+    if _RE_TOKEN_O_OTP.search(combined):
+        return True
+    return False
+
+
+def classify_reply_intent(
+    subject: str,
+    body: str,
+    headers: dict[str, str] | None = None,
+    *,
+    sender_email: str = "",
+) -> str:
+    if es_correo_automatico(subject, body, headers=headers, sender_email=sender_email):
         return "respuesta_automatica"
+
+    clean_body = _strip_quoted_reply(body).lower()
 
     # La baja la decide la misma función que usa el agente, para que motor y agente
     # no discrepen. Va después del autorespondedor: un pie de página automático con
@@ -655,6 +867,44 @@ def classify_reply_intent(subject: str, body: str, headers: dict[str, str] | Non
     return "respuesta_recibida"
 
 
+def _leer_rebote_diferido(msg: email.message.Message) -> tuple[str, str, bool] | None:
+    """Si el mensaje es un aviso de entrega fallida, devuelve `(correo, motivo, es_permanente)`.
+
+    Los rebotes no llegan como error de SMTP: llegan minutos después como un correo del
+    `mailer-daemon`. Como ese remitente no es ningún lead, antes se descartaban en silencio
+    y el prospecto seguía recibiendo seguimientos a una dirección muerta (saldo de IA tirado).
+    """
+    tipo = (msg.get_content_type() or "").lower()
+    report_type = (msg.get_param("report-type") or "").lower()
+    es_reporte = tipo == "multipart/report" and report_type == "delivery-status"
+    _, remitente = parseaddr(msg.get("From") or "")
+    remitente = remitente.lower()
+    parece_daemon = any(p in remitente for p in ("mailer-daemon", "postmaster"))
+    if not (es_reporte or parece_daemon):
+        return None
+
+    destino, estado, accion, diagnostico = "", "", "", ""
+    for parte in msg.walk():
+        if (parte.get_content_type() or "").lower() != "message/delivery-status":
+            continue
+        for bloque in parte.get_payload():
+            if not hasattr(bloque, "get"):
+                continue
+            crudo = (bloque.get("Final-Recipient") or bloque.get("Original-Recipient") or "").strip()
+            if crudo and not destino:
+                destino = crudo.split(";", 1)[-1].strip().strip("<>").lower()
+            estado = (bloque.get("Status") or estado).strip()
+            accion = (bloque.get("Action") or accion).strip().lower()
+            diagnostico = (bloque.get("Diagnostic-Code") or diagnostico).strip()
+    if not destino or "@" not in destino:
+        return None
+
+    # 5.x.x = la dirección no existe o rechaza para siempre. 4.x.x = demora, puede llegar aún.
+    permanente = estado.startswith("5") or (accion == "failed" and not estado.startswith("4"))
+    motivo = (diagnostico or f"status={estado or '?'} action={accion or '?'}")[:200]
+    return destino, motivo, permanente
+
+
 def sync_imap_replies(max_messages: int = 40, *, dry_run: bool = False) -> dict[str, object]:
     """Lee la bandeja, clasifica y actúa. En `dry_run` NO escribe en la BD, no notifica,
     no toca Calendar y no registra nada en RESULTADOS_MERCADO.md: solo mira y cuenta.
@@ -674,6 +924,7 @@ def sync_imap_replies(max_messages: int = 40, *, dry_run: bool = False) -> dict[
             return {"imap_ready": False, "checked": 0, "matched": 0, "interested": []}
 
         matched, checked, agent_runs = 0, 0, 0
+        rebotes_detectados = rebotes_temporales = 0
         interested: list[dict[str, str]] = []
         agent_ready = _tiene_anthropic_key(cfg)
         try:
@@ -700,12 +951,55 @@ def sync_imap_replies(max_messages: int = 40, *, dry_run: bool = False) -> dict[
 
                     subj = _decode_mime_header(msg.get("Subject") or "")
                     snippet = _extract_text_snippet(msg)
+
+                    # Primero los rebotes: vienen del mailer-daemon, no del prospecto.
+                    rebote = _leer_rebote_diferido(msg)
+                    if rebote is not None:
+                        destino_rebote, motivo_rebote, permanente = rebote
+                        lead_rebotado = database.get_lead_by_email(destino_rebote)
+                        if not permanente or not lead_rebotado:
+                            # Demora temporal (4.x.x) o correo que no es nuestro: no se toca el
+                            # lead, pero el aviso no se vuelve a procesar.
+                            if not dry_run:
+                                database.record_processed_reply(
+                                    msg_id, destino_rebote, "rebote_temporal", motivo_rebote,
+                                )
+                            rebotes_temporales += 1
+                            continue
+                        if dry_run:
+                            rebotes_detectados += 1
+                            continue
+                        database.record_processed_reply(msg_id, destino_rebote, "rebote", motivo_rebote)
+                        database.mark_lead_bounced(destino_rebote, motivo_rebote)
+                        database.cancel_pending_outbox_for_recipient(destino_rebote)
+                        database.cancel_followups_for_lead(lead_rebotado["id"])
+                        rebotes_detectados += 1
+                        try:
+                            registrar_resultado_mercado(
+                                lead_rebotado.get("nicho") or "(sin nicho)",
+                                "(rebote diferido)", "correo", 1, "rebote",
+                                f"Rebote diferido de {destino_rebote}: {motivo_rebote[:120]}",
+                            )
+                        except Exception:
+                            pass
+                        continue
+
                     lead = database.get_lead_by_email(sender_email)
                     if not lead:
                         continue
 
-                    hdrs = {"Auto-Submitted": msg.get("Auto-Submitted") or "", "Precedence": msg.get("Precedence") or ""}
-                    intent = classify_reply_intent(subj, snippet, headers=hdrs)
+                    hdrs = {
+                        "Auto-Submitted": msg.get("Auto-Submitted") or "",
+                        "Precedence": msg.get("Precedence") or "",
+                        "X-Autoreply": msg.get("X-Autoreply") or "",
+                        "X-Autorespond": msg.get("X-Autorespond") or "",
+                        "X-Auto-Response-Suppress": msg.get("X-Auto-Response-Suppress") or "",
+                        "Auto-Response-Suppress": msg.get("Auto-Response-Suppress") or "",
+                        "X-Zendesk-Ticket-Id": msg.get("X-Zendesk-Ticket-Id") or "",
+                        "X-Freshdesk-Ticket": msg.get("X-Freshdesk-Ticket") or "",
+                        "Return-Path": msg.get("Return-Path") or "",
+                    }
+                    intent = classify_reply_intent(subj, snippet, headers=hdrs, sender_email=sender_email)
                     matched += 1
 
                     if dry_run:
@@ -721,13 +1015,26 @@ def sync_imap_replies(max_messages: int = 40, *, dry_run: bool = False) -> dict[
 
                     database.record_processed_reply(msg_id, sender_email, intent, snippet)
 
+                    # Autorrespuestas (Form Submitted, tokens, fuera de oficina, tickets):
+                    # NO son leads ni ventas. Se anotan en silencio y nunca disparan aviso,
+                    # Calendar, agente de IA ni métricas de mercado.
+                    if intent == "respuesta_automatica":
+                        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+                        auto_note = f"[Autorrespuesta ignorada {stamp}] Asunto: {subj}"
+                        prev_notes = (lead.get("notes") or "").strip()
+                        merged_notes = f"{auto_note}\n{prev_notes}".strip() if prev_notes else auto_note
+                        database.update_lead_stage(
+                            lead["id"], str(lead.get("stage") or "contactado"), notes=merged_notes,
+                        )
+                        continue
+
                     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
                     new_note = f"[Respuesta {stamp} | {intent}] Asunto: {subj} — {snippet[:260]}"
                     prev_notes = (lead.get("notes") or "").strip()
                     merged_notes = f"{new_note}\n{prev_notes}".strip() if prev_notes else new_note
 
                     updated_lead = database.update_lead_stage(lead["id"], intent, notes=merged_notes)
-                    # Si contestó, no se le persigue más con lo que ya estaba en cola:
+                    # Si contestó un humano, no se le persigue más con lo que ya estaba en cola:
                     # ni correos pendientes ni seguimientos del agente.
                     database.cancel_pending_outbox_for_recipient(sender_email)
                     database.cancel_followups_for_lead(lead["id"])
@@ -737,9 +1044,15 @@ def sync_imap_replies(max_messages: int = 40, *, dry_run: bool = False) -> dict[
                     # mismo message_id no vuelve a llegar hasta aquí nunca.
                     if intent in ("interesado_cita", "baja"):
                         try:
+                            estilo_enviado = database.get_last_sent_style_for_recipient(sender_email)
+                            angulo_resp = (
+                                f"modelo:{estilo_enviado}"
+                                if estilo_enviado
+                                else "(respuesta entrante, ángulo no registrado)"
+                            )
                             registrar_resultado_mercado(
                                 lead.get("nicho") or "(sin nicho)",
-                                "(respuesta entrante, ángulo no registrado)",
+                                angulo_resp,
                                 "correo", 1,
                                 "respondió" if intent == "interesado_cita" else "baja",
                                 f"Respuesta real de {sender_email}. Asunto: {subj}",
@@ -778,10 +1091,12 @@ def sync_imap_replies(max_messages: int = 40, *, dry_run: bool = False) -> dict[
                                 pass
         except Exception as exc:
             return {"imap_ready": True, "error": str(exc), "checked": checked, "matched": matched,
-                    "interested": interested, "agent_runs": agent_runs}
+                    "interested": interested, "agent_runs": agent_runs,
+                    "rebotes_detectados": rebotes_detectados, "rebotes_temporales": rebotes_temporales}
 
         return {"imap_ready": True, "checked": checked, "matched": matched,
-                "interested": interested, "agent_runs": agent_runs}
+                "interested": interested, "agent_runs": agent_runs,
+                "rebotes_detectados": rebotes_detectados, "rebotes_temporales": rebotes_temporales}
 
 
 def run_sales_agent_cycle(*, dry_run: bool = False, max_leads: int = 5) -> dict[str, object]:
@@ -966,8 +1281,23 @@ def sync_landing_messages(max_messages: int = 40) -> dict[str, object]:
                     if database.has_landing_message(msg_id):
                         continue
 
+                    subj_landing = _decode_mime_header(msg.get("Subject") or "")
                     campos = extraer_campos_landing(msg, correo_propio=user)
                     resumen_panel = campos["resumen"]
+
+                    # Correos de sistema de Web3Forms (tokens, access key, verificación de cuenta)
+                    # NO son mensajes de visitantes ni leads de la landing.
+                    texto_landing_check = f"{subj_landing} {campos['mensaje']}".lower()
+                    es_aviso_sistema_landing = (
+                        not campos["telefono"]
+                        and any(k in texto_landing_check for k in (
+                            "access key", "access token", "verify your email", "verification code",
+                            "reset your password", "confirm your email", "api key", "your token",
+                            "token de acceso", "código de verificación", "codigo de verificacion",
+                        ))
+                    )
+                    if es_aviso_sistema_landing:
+                        continue
 
                     database.add_landing_message(msg_id, resumen_panel)
                     new_messages += 1
@@ -1039,6 +1369,8 @@ def resumen_en_seco() -> dict[str, object]:
     if not hay_bd:
         return salida
     ajustes = database.get_settings()
+    agente = _load_sales_agent()
+    rendimiento_modelos = agente.resumen_rendimiento_modelos() if agente is not None else []
     salida.update({
         "limite_diario": get_daily_limit(cfg),
         "en_ventana_de_envio": _is_within_sending_window(ajustes),
@@ -1051,6 +1383,7 @@ def resumen_en_seco() -> dict[str, object]:
         "gasto_del_agente_hoy_usd": round(database.agent_cost_today_usd(), 6),
         "piezas_contenido_hoy": database.content_created_today(),
         "posts_ig_publicados_hoy": database.ig_published_today(),
+        "rendimiento_modelos_correo": rendimiento_modelos,
         "silencios_por_registrar": registrar_silencios_vencidos(dry_run=True),
     })
     return salida

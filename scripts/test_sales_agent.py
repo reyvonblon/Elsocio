@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -1446,6 +1447,256 @@ class TestRegistroDeEventosRealesDelMotor(BaseDispatcherEnSeco):
         self.assertEqual(res["bounced"], 0, "quemó un lead por un error temporal")
         self.assertEqual(int(database.get_lead_by_email("ok@ejemplo.com")["bounced"]), 0)
         self.assertEqual(len(self.filas_resultados()), 1)
+
+
+class TestHumanizacionYAnalisisProspecto(BaseConBDTemporal):
+    def test_correo_fluido_sin_tabla_520_sin_doble_firma_ni_doble_baja(self) -> None:
+        crudo = (
+            "Hola, estuve viendo Nuva Studio.\r\n\r\n\r\n\r\n"
+            "Trabajamos renders de espacios antes de obra para estudios en Bogotá.\r\n\r\n"
+            "Si quieren les muestro dos ejemplos.\r\n\r\n"
+            "Si no quieren recibir más correos, solo respondan \"baja\".\r\n\r\n"
+            "Saludos,\r\nEl Socio\r\n\r\n"
+            "Si no quieres recibir más correos míos, respóndeme con la palabra BAJA y no te vuelvo a escribir."
+        )
+        texto, html_doc = autopilot_dispatcher.build_email_parts(CFG_FALSA, crudo, include_signature=True)
+        self.assertNotIn("width=\"520\"", html_doc)
+        self.assertNotIn("<table", html_doc.lower())
+        self.assertNotIn("Verdana", html_doc)
+        self.assertIn("viewport", html_doc)
+        self.assertIn("<p style=", html_doc)
+        self.assertNotIn("\n\n\n", texto)
+        self.assertNotIn("Saludos,", texto)
+        # Solo una línea de baja en todo el correo (ni duplicada ni repetida en plural + singular).
+        self.assertEqual(len(re.findall(r"\bbaja\b", texto.lower())), 1, texto)
+        self.assertEqual(len(re.findall(r"\bbaja\b", html_doc.lower())), 1, html_doc)
+        self.assertIn("Raymond Vonblon", html_doc)
+
+    def test_guarda_anti_ia_bloquea_cliches_vinetas_emojis_y_asunto_repetido(self) -> None:
+        agente = self.agente()
+        agente.lead = self.crear_lead(email="contacto@nuva.co")
+        casos_malos = [
+            ("duda rápida", "Hola, equipo de Nuva. Les escribo porque algo que veo mucho en estudios."),
+            ("pregunta", "Una pregunta directa: ¿te gustaría una solución integral para tu negocio?"),
+            ("idea", "Hola, te ayudo con:\n- Renders\n- Planos\n- Acústica"),
+            ("novedad", "Hola, mira esta idea 🚀 para tu marca!!"),
+            ("entusiasta", "Buen día, señores Nuva, les quiero mostrar esto!"),
+            ("formal", "Buen día, señores Nuva. Quedo a su entera disposición. Saludos cordiales."),
+            ("largo", "Hola " + " ".join(["palabra"] * 135)),
+        ]
+        for asunto, cuerpo in casos_malos:
+            with self.subTest(asunto=asunto):
+                ok, aviso = agente.ejecutar_herramienta(
+                    "enviar_correo", {"asunto": asunto, "cuerpo": cuerpo}, es_frio=True,
+                )
+                self.assertFalse(ok, aviso)
+                self.assertIn("calidad humana", aviso)
+
+        # Un correo humano limpio sí pasa y se normaliza sin duplicar firma ni baja.
+        ok, _ = agente.ejecutar_herramienta(
+            "enviar_correo",
+            {
+                "asunto": "duda sobre Nuva Studio",
+                "cuerpo": (
+                    "Hola, vi los proyectos de mobiliario a medida de Nuva en Bogotá.\n\n"
+                    "Hacemos renders rápidos antes de obra para que el cliente apruebe sin vueltas. "
+                    "Si les sirve, les muestro dos ejemplos nuestros.\n\nSaludos,\nEl Socio"
+                ),
+            },
+            es_frio=True,
+        )
+        self.assertTrue(ok)
+        with sqlite3.connect(self.db) as con:
+            guardado = con.execute("SELECT body FROM outbox ORDER BY id DESC LIMIT 1").fetchone()[0]
+        self.assertNotIn("Saludos,", guardado)
+        self.assertEqual(len(re.findall(r"\bbaja\b", guardado.lower())), 1, guardado)
+
+        # Segundo lead el mismo día NO puede repetir exactamente el mismo asunto largo.
+        agente.lead = self.crear_lead(email="hola@otroestudio.co")
+        ok_rep, aviso_rep = agente.ejecutar_herramienta(
+            "enviar_correo",
+            {"asunto": "duda sobre Nuva Studio", "cuerpo": "Hola, vi sus proyectos en Medellín."},
+            es_frio=True,
+        )
+        self.assertFalse(ok_rep)
+        self.assertIn("asunto_repetido_hoy", aviso_rep)
+
+    def test_prospect_hunter_extrae_marca_real_dossier_y_filtra_ruido(self) -> None:
+        import prospect_hunter  # noqa: PLC0415
+
+        html_tienda = """
+        <html lang="es"><head>
+          <title>Tienda de Cosmética Natural en Medellín | Makeno Lab</title>
+          <meta property="og:site_name" content="Makeno Lab" />
+          <meta name="description" content="Sérums faciales artesanales hechos en Medellín. Envío desde $45.000 COP." />
+        </head><body>
+          <h1>Cuidado facial botánico hecho en Medellín</h1>
+          <h2>Sérums y aceites puros</h2>
+          <script src="https://cdn.shopify.com/s/files/theme.js"></script>
+          <a href="https://instagram.com/makenolab">IG</a>
+          <a href="https://wa.me/573001112233">WhatsApp</a>
+          <p>Creamos fórmulas naturales para piel sensible en Colombia.</p>
+        </body></html>
+        """
+        perfil = prospect_hunter.analizar_sitio_web(
+            html_tienda, "https://makenolab.co/", nicho="ecommerce-catalogo-visual",
+        )
+        self.assertEqual(perfil["marca"], "Makeno Lab")
+        self.assertEqual(perfil["ciudad"], "Medellín")
+        self.assertEqual(perfil["plataforma"], "Shopify")
+        self.assertEqual(perfil["instagram"], "@makenolab")
+        self.assertEqual(perfil["whatsapp"], "+57 300 111 2233")
+        self.assertTrue(perfil["encaja"])
+        self.assertNotIn("45.000", perfil["dossier"])
+
+        # Títulos SEO sin og:site_name deben caer a la marca real, no al título largo.
+        self.assertEqual(
+            prospect_hunter._clean_business_name("Diseño de interiores y mobiliario a medida en Bogotá | Nuva Studio", "nuvastudio.co"),
+            "Nuva Studio",
+        )
+        self.assertEqual(
+            prospect_hunter._clean_business_name("Remodelación y diseño de interiores en Bogotá", "lalupastudio.com"),
+            "Lalupastudio",
+        )
+
+        # Filtra Claro, notificaciones* y gmails basura.
+        cands = prospect_hunter._clean_email_candidates(
+            "notificacionesclaro@claro.com.co xf6501985@gmail.com hola@nuvastudio.co",
+            "nuvastudio.co",
+        )
+        self.assertEqual(cands, ["hola@nuvastudio.co"])
+
+        # Filtra clínica médica pura en nicho e-commerce.
+        html_clinica = """
+        <html lang="es"><head><title>Dermatología Estética y Salud Capilar en Cali</title></head>
+        <body><h1>Clínica dermatológica y medicina estética</h1><p>Agenda tu consulta médica en Cali.</p></body></html>
+        """
+        perfil_clinica = prospect_hunter.analizar_sitio_web(
+            html_clinica, "https://clinicaejemplo.co/", nicho="ecommerce-catalogo-visual",
+        )
+        self.assertFalse(perfil_clinica["encaja"])
+
+    def test_agente_inyecta_dossier_y_nombre_persona_en_contexto(self) -> None:
+        database.upsert_lead(
+            name="Santiago", company="Ecore Studio", email="santiago.salazar@ejemplo.com",
+            nicho="automatizacion-agencias-estudios", stage="nuevo_lead",
+            website="https://ecore.co/",
+            dossier="Web: https://ecore.co/\nMarca real: Ecore Studio\nCiudad detectada: Medellín\nDescripción en su web: Agencia de pauta y contenido.",
+        )
+        capturado: dict[str, object] = {}
+
+        def _fake_api(_key, cuerpo):
+            capturado["cuerpo"] = cuerpo
+            return respuesta_falsa({"type": "text", "text": "Listo"})
+
+        with mock.patch.object(sales_agent, "llamar_api", side_effect=_fake_api):
+            self.agente().correr(lead_email="santiago.salazar@ejemplo.com")
+
+        prompt_usr = capturado["cuerpo"]["messages"][0]["content"]
+        self.assertIn("Persona detectada: Santiago", prompt_usr)
+        self.assertIn("Dossier real extraído de su sitio web", prompt_usr)
+        self.assertIn("Agencia de pauta y contenido", prompt_usr)
+        self.assertIn("Modelo de correo asignado", prompt_usr)
+        self.assertEqual(capturado["cuerpo"]["output_config"]["effort"], "medium")
+
+    def test_modelos_de_correo_rotan_y_aprenden_del_mas_efectivo(self) -> None:
+        # 1) Fase de exploración: sin envíos, debe rotar por los 4 modelos sobrios.
+        vistos = []
+        for idx in range(4):
+            elegido = sales_agent.elegir_modelo_correo("modelado-3d-espacios")
+            self.assertEqual(elegido["modo"], "exploracion")
+            vistos.append(elegido["id"])
+            database.enqueue_email(
+                recipient=f"exp{idx}@ejemplo.com", subject=f"asunto {idx}",
+                body="Hola", nicho="modelado-3d-espacios", estilo=str(elegido["id"]),
+            )
+        self.assertEqual(set(vistos), {m["id"] for m in sales_agent.MODELOS_CORREO})
+
+        # 2) Completa 4 envíos por cada modelo (total 16) con resultados reales distintos:
+        #    `ultra_breve` trae 3 interesados, `caso_real` recibe 3 bajas, los otros 2 silencio.
+        for modelo_id in [m["id"] for m in sales_agent.MODELOS_CORREO]:
+            for n in range(1, sales_agent.MIN_ENVIOS_EXPLORACION):
+                em = f"{modelo_id}_{n}@ejemplo.com"
+                database.upsert_lead(name="L", company="C", email=em, nicho="modelado-3d-espacios", stage="contactado")
+                database.enqueue_email(
+                    recipient=em, subject=f"idea {modelo_id} {n}", body="Hola",
+                    nicho="modelado-3d-espacios", estilo=modelo_id,
+                )
+                if modelo_id == "ultra_breve":
+                    database.record_processed_reply(f"m-{em}", em, "interesado_cita", "Me interesa")
+                elif modelo_id == "caso_real":
+                    database.record_processed_reply(f"m-{em}", em, "baja", "Baja por favor")
+
+        # Con total=16 (16 % 4 == 0), debe elegir al ganador real (`ultra_breve`).
+        ganador = sales_agent.elegir_modelo_correo("modelado-3d-espacios")
+        self.assertEqual(ganador["id"], "ultra_breve")
+        self.assertEqual(ganador["modo"], "ganador")
+
+        # Al llegar a total=19 (19 % 4 == 3), dedica 1 de cada 4 envíos a explorar un retador SANO
+        # (nunca `caso_real` que tuvo 3 bajas).
+        for k in range(3):
+            database.enqueue_email(
+                recipient=f"extra{k}@ejemplo.com", subject=f"extra {k}", body="Hola",
+                nicho="modelado-3d-espacios", estilo="ultra_breve",
+            )
+        exploracion_activa = sales_agent.elegir_modelo_correo("modelado-3d-espacios")
+        self.assertEqual(exploracion_activa["modo"], "aprendizaje_exploracion")
+        self.assertIn(exploracion_activa["id"], ("muestra_directa", "observacion_puntual"))
+        self.assertNotEqual(exploracion_activa["id"], "caso_real")
+
+    def test_agente_guarda_estilo_y_imap_lo_atribuye(self) -> None:
+        self.crear_lead(email="cliente@ejemplo.com")
+        falsa = respuesta_falsa(
+            bloque_tool(
+                "enviar_correo",
+                {"asunto": "duda sobre su tienda", "cuerpo": "Hola, vi su catálogo en línea y podemos ayudarles."},
+            ),
+            stop="tool_use",
+        )
+        fin = respuesta_falsa({"type": "text", "text": "Listo"})
+        with mock.patch.object(sales_agent, "llamar_api", side_effect=[falsa, fin]):
+            self.agente().correr(lead_email="cliente@ejemplo.com")
+
+        estilo_guardado = database.get_last_sent_style_for_recipient("cliente@ejemplo.com")
+        self.assertIn(estilo_guardado, sales_agent.MODELOS_POR_ID)
+
+    def test_form_submitted_tokens_y_autorrespuestas_no_son_leads_ni_ventas(self) -> None:
+        casos_auto = [
+            ("Form Submitted", "Thank you! Your form was submitted. Contact us on WhatsApp for more info.", {}, "contacto@marca.co"),
+            ("New Form Submission", "Hemos recibido tu solicitud, pronto te contactamos por teléfono.", {}, "info@marca.co"),
+            ("Your access token", "Here is your verification token: 998877. Do not share.", {}, "hola@servicio.com"),
+            ("Código de verificación", "Tu código de verificación para iniciar sesión es 445566.", {}, "soporte@app.com"),
+            ("Confirmación", "Gracias por escribirnos, un asesor se comunicará contigo muy pronto.", {}, "ventas@marca.co"),
+            ("Re: duda", "Hola, este es un mensaje automático, no responda a este correo.", {}, "hola@marca.co"),
+            ("Re: fotos", "Recibido con gusto, pronto hablamos.", {"X-Autoreply": "yes"}, "hola@marca.co"),
+            ("Re: catálogo", "Gracias, cuéntame más.", {}, "noreply@marca.co"),
+        ]
+        for asunto, cuerpo, hdrs, remitente in casos_auto:
+            with self.subTest(asunto=asunto, remitente=remitente):
+                self.assertEqual(
+                    autopilot_dispatcher.classify_reply_intent(asunto, cuerpo, headers=hdrs, sender_email=remitente),
+                    "respuesta_automatica",
+                )
+
+        # Un lead real pidiendo ayuda con un formulario web SÍ sigue siendo lead caliente.
+        intent_real = autopilot_dispatcher.classify_reply_intent(
+            "Re: duda sobre su tienda",
+            "Hola, sí me interesa. Necesito automatizar un formulario de pedidos en mi tienda.",
+            sender_email="laura@tiendareal.co",
+        )
+        self.assertEqual(intent_real, "interesado_cita")
+
+        # En el agente de ventas, una autorrespuesta de Form Submitted / token se ignora con 0 llamadas a la API.
+        self.crear_lead(email="bot@ejemplo.com")
+        with mock.patch.object(sales_agent, "llamar_api",
+                               side_effect=AssertionError("llamó a la API por una autorrespuesta")) as api:
+            res = self.agente().correr(
+                lead_email="bot@ejemplo.com",
+                mensaje_lead="Form Submitted: thanks for reaching out, we received your message.",
+            )
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["motivo"], "autorrespuesta_ignorada")
+        self.assertEqual(api.call_count, 0)
 
 
 if __name__ == "__main__":

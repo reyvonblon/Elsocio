@@ -104,6 +104,25 @@ class TestGuardaEnContenido(BaseContenido):
                                     guion="Te cuesta 3 millones arreglarlo")
         self.assertEqual(database.list_content(), [])
 
+    def test_un_plazo_en_cifras_no_sale_al_video(self) -> None:
+        """La guía §4 prohíbe TODA cifra en el video: no solo precios, también plazos."""
+        for texto in ("El lote sale en 15 días.", "Te respondo en 2 horas.", "Paso 1 de 3"):
+            with self.assertRaises(content_manager.GuardaBloqueada, msg=texto):
+                content_manager.encolar(tipo="video", gancho="Frase limpia", guion=texto)
+        self.assertEqual(database.list_content(), [])
+
+    def test_el_mismo_plazo_escrito_en_letras_si_pasa(self) -> None:
+        """No se censura el idioma: lo prohibido es el dígito en pantalla, no la idea."""
+        content_manager.encolar(tipo="video", gancho="Frase limpia",
+                                guion="El lote sale en quince días.")
+        self.assertEqual(len(database.list_content()), 1)
+
+    def test_un_tooltip_con_cifra_bloquea_la_pieza_entera(self) -> None:
+        with self.assertRaises(content_manager.GuardaBloqueada):
+            content_manager.encolar(tipo="video", gancho="Frase limpia", guion="Bloque limpio",
+                                    planos=[{"toma": "ciudad", "tooltip": "Listo en 5 días"}])
+        self.assertEqual(database.list_content(), [])
+
     def test_link_de_pago_bloquea(self) -> None:
         with self.assertRaises(content_manager.GuardaBloqueada):
             content_manager.encolar(tipo="post", gancho="Mira esto",
@@ -155,7 +174,29 @@ class TestGenerar(BaseContenido):
         import json
         props = json.loads(cmd[2])
         self.assertEqual(props["bloques"], ["Primer bloque", "Segundo bloque"])
-        self.assertEqual(props["cierre"], "Cierre limpio")
+        # El cierre del video ya no es el pie de publicación: es el cierre de venta de marca.
+        # Rota entre 3 variantes (lugar/persona/directo, ver `cierre_de_venta`): las 3 nombran
+        # a "El Socio" en la última oración, pero solo "lugar"/"persona" terminan en LINEA_MARCA
+        # literal — "directo" es una frase corta aparte.
+        self.assertIn("Socio", props["cierre"])
+        self.assertNotIn("link en bio", props["cierre"].lower())
+
+    def test_cierre_de_venta_nombra_el_local_del_nicho(self) -> None:
+        casos = {
+            "fichas-tecnicas-ropa": "No seas el Taller A. Sé el Taller B.",
+            "modelado-3d-espacios": "No seas el Local A. Sé el Local B.",
+            "ecommerce-catalogo-visual": "No seas la Tienda A. Sé la Tienda B.",
+            "automatizacion-agencias-estudios": "No seas la Agencia A. Sé la Agencia B.",
+        }
+        for nicho, inicio in casos.items():
+            self.assertEqual(content_manager.cierre_de_venta(nicho, []),
+                             f"{inicio} {content_manager.LINEA_MARCA}")
+
+    def test_cierre_de_venta_deduce_el_nicho_del_guion_si_es_general(self) -> None:
+        cierre = content_manager.cierre_de_venta(
+            "general", ["Tu remodelación se come la pared equivocada.", "El maestro rompe sin plano."])
+        self.assertTrue(cierre.startswith("No seas el Local A."), cierre)
+        self.assertEqual(content_manager.revisar_pieza(cierre), [])
 
     def test_render_que_falla_no_marca_generado(self) -> None:
         content_id = self.encolar_limpia()
@@ -177,7 +218,8 @@ class TestGenerar(BaseContenido):
         self.run.assert_not_called()
 
     def test_el_guion_se_corta_en_max_bloques(self) -> None:
-        guion = "\n".join(f"bloque {i}" for i in range(12))
+        # Sin dígitos: en un reel el guion acaba QUEMADO en pantalla y la guarda prohíbe toda cifra.
+        guion = "\n".join(f"bloque {chr(ord('a') + i)}" for i in range(12))
         content_id = self.encolar_limpia(tipo="video", guion=guion)
         content_manager.generar(content_id)
         import json
@@ -314,7 +356,11 @@ class TestEscenaYEtiquetas(BaseContenido):
 
     def test_la_escena_por_defecto_no_ensucia_la_nota(self) -> None:
         content_id = self.encolar_limpia(tipo="video", nota="sin más")
-        self.assertEqual(database.get_content(content_id)["nota"], "sin más")
+        nota = database.get_content(content_id)["nota"]
+        # Un video siempre guarda su formato (la rotación lo necesita), pero nada más.
+        self.assertEqual(content_manager.nota_humana(nota), "sin más")
+        self.assertNotIn("escena=", nota)
+        self.assertNotIn("[planos]", nota)
 
     def test_escena_inventada_revienta_antes_de_tocar_la_bd(self) -> None:
         with self.assertRaises(ValueError):
@@ -484,6 +530,197 @@ class TestNadaRealSeToca(unittest.TestCase):
                 ["--dry-run", "encolar", "--gancho", "Son 70000 pesos"])
         self.assertEqual(código, 2)
         self.assertEqual(huella(DB_REAL), antes_db)
+
+
+# ------------------------------------ 10. formato historia (1080x1920) y conteos por tipo
+
+class TestFormatoHistoriaYConteosPorTipo(BaseContenido):
+    def test_historia_llama_a_generar_historia_sh_y_alterna_tema(self) -> None:
+        c1 = self.encolar_limpia(
+            tipo="historia",
+            gancho="Tu equipo pierde el día copiando datos a mano.",
+            guion="Eso ya se automatiza limpio.",
+            caption="Responde esta historia con tu caso",
+            nicho="automatizacion-agencias-estudios",
+        )
+        c2 = self.encolar_limpia(
+            tipo="historia",
+            gancho="Tu catálogo parece de otro negocio.",
+            nicho="ecommerce-catalogo-visual",
+        )
+        r1 = content_manager.generar(c1)
+        r2 = content_manager.generar(c2)
+        self.assertTrue(r1["generado"], r1)
+        self.assertTrue(r2["generado"], r2)
+
+        cmd1 = self.run.call_args_list[0][0][0]
+        cmd2 = self.run.call_args_list[1][0][0]
+        self.assertIn("generar_historia.sh", cmd1[0])
+        self.assertTrue(r1["archivo"].endswith(".png"))
+        self.assertIn("/historias/", r1["archivo"])
+        self.assertEqual(cmd1[5], "AGENCIAS")
+        self.assertEqual(cmd2[5], "CATÁLOGO")
+        self.assertNotEqual(cmd1[6], cmd2[6], "dos historias seguidas deben alternar oscuro/crema")
+
+    def test_historia_con_precio_o_link_bloqueada_por_guarda(self) -> None:
+        with self.assertRaises(content_manager.GuardaBloqueada):
+            content_manager.encolar(
+                tipo="historia",
+                gancho="Automatiza hoy por 120000 pesos",
+            )
+        with self.assertRaises(content_manager.GuardaBloqueada):
+            content_manager.encolar(
+                tipo="historia",
+                gancho="Frase limpia",
+                caption="Mira bit.ly/cobro",
+            )
+        self.assertEqual(database.list_content(), [])
+
+    def test_cli_acepta_tipo_historia(self) -> None:
+        codigo = content_manager.main([
+            "encolar", "--tipo", "historia",
+            "--gancho", "Lo que pospones hoy frena tu semana.",
+        ])
+        self.assertEqual(codigo, 0)
+        self.assertEqual(database.list_content()[0]["tipo"], "historia")
+
+    def test_conteos_diarios_por_tipo_en_bd(self) -> None:
+        v1 = self.encolar_limpia(tipo="video", gancho="Gancho video limpio.")
+        p1 = self.encolar_limpia(tipo="post", gancho="Gancho post limpio.")
+        h1 = self.encolar_limpia(tipo="historia", gancho="Gancho historia limpio.")
+        por_tipo = database.content_created_today_by_tipo()
+        self.assertEqual(por_tipo, {"post": 1, "video": 1, "historia": 1, "carrusel": 0})
+
+        database.update_content(v1, estado="publicado", ig_media_id="ig_v1")
+        database.update_content(h1, estado="publicado", ig_media_id="ig_h1")
+        self.assertEqual(
+            database.ig_published_today_by_tipo(),
+            {"post": 0, "video": 1, "historia": 1, "carrusel": 0},
+        )
+        self.assertIsNotNone(database.last_ig_published_datetime())
+        self.assertIsNotNone(database.get_content(p1))
+
+
+class TestPlanosReelMundo(BaseContenido):
+    """Storyboard: una toma por frase. Viaja en la nota, llega a los props y pasa por la guarda."""
+
+    PLANOS = [
+        {"toma": "pareja", "lado": "A"},
+        {"toma": "detalle", "lado": "A", "foco": "audios", "tooltip": "A ciegas"},
+        {"toma": "detalle", "lado": "B", "foco": "ficha", "tarjeta": "ficha"},
+        {"toma": "pareja"},
+    ]
+
+    def test_planos_viajan_en_la_nota_sin_pisar_la_humana(self) -> None:
+        content_id = self.encolar_limpia(tipo="video", nota="ojo al cierre", planos=self.PLANOS)
+        pieza = database.get_content(content_id)
+        self.assertEqual(content_manager.nota_humana(pieza["nota"]), "ojo al cierre")
+        self.assertEqual(content_manager.leer_planos(pieza["nota"]), self.PLANOS)
+
+    def test_tooltip_con_cifra_bloquea_la_pieza(self) -> None:
+        with self.assertRaises(content_manager.GuardaBloqueada):
+            content_manager.encolar(tipo="video", gancho="Frase limpia",
+                                    planos=[{"foco": "mesa", "tooltip": "Desde 50.000"}])
+        self.assertEqual(database.list_content(), [])
+
+    def test_valores_desconocidos_se_descartan_no_revientan(self) -> None:
+        limpios = content_manager.normalizar_planos(
+            [{"toma": "drone", "foco": "mesa", "tarjeta": "holograma", "lado": "c"}, "basura"])
+        self.assertEqual(limpios, [{"foco": "mesa"}, {}])
+
+    def test_planos_vacios_no_ensucian_la_nota(self) -> None:
+        content_id = self.encolar_limpia(tipo="video", nota="sin más", planos=[{}, {"toma": "x"}])
+        nota = database.get_content(content_id)["nota"]
+        self.assertEqual(content_manager.nota_humana(nota), "sin más")
+        self.assertNotIn("[planos]", nota)
+
+    def test_post_ignora_planos(self) -> None:
+        content_id = self.encolar_limpia(tipo="post", nota="n", planos=self.PLANOS)
+        self.assertEqual(content_manager.leer_planos(database.get_content(content_id)["nota"]), [])
+
+    def test_generar_pasa_los_planos_a_los_props(self) -> None:
+        import json as _json
+        content_id = self.encolar_limpia(tipo="video", planos=self.PLANOS)
+        res = content_manager.generar(content_id, dry_run=True)
+        props = _json.loads(res["comando"][2])
+        self.assertEqual(props["planos"], self.PLANOS)
+
+    def test_linea_de_planos_rota_se_ignora(self) -> None:
+        self.assertEqual(content_manager.leer_planos("[planos] {no es json"), [])
+
+    def test_publicar_conserva_los_planos(self) -> None:
+        content_id = self.encolar_limpia(tipo="video", planos=self.PLANOS)
+        with mock.patch.object(content_manager.subprocess, "run") as run:
+            run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            content_manager.generar(content_id)
+        content_manager.publicar(content_id, resultado="comentario real", nota="publicado a mano")
+        nota = database.get_content(content_id)["nota"]
+        self.assertEqual(content_manager.leer_planos(nota), self.PLANOS)
+
+
+class TestFormatosYRotacion(BaseContenido):
+    """El Socio no hace siempre el mismo video: rota mundo / collage / duelo."""
+
+    def test_nunca_dos_reels_seguidos_con_el_mismo_formato(self) -> None:
+        vistos = []
+        for n in range(6):
+            res = content_manager.encolar(tipo="video", gancho=f"Gancho limpio número {'abcdef'[n]}",
+                                          guion="Uno\nDos")
+            vistos.append(res["formato"])
+        for a, b in zip(vistos, vistos[1:]):
+            self.assertNotEqual(a, b, vistos)
+        self.assertEqual(set(vistos), set(content_manager.FORMATOS))
+
+    def test_respeta_la_sugerencia_si_no_repite(self) -> None:
+        self.assertEqual(content_manager.elegir_formato("duelo", ["mundo"]), "duelo")
+
+    def test_ignora_la_sugerencia_si_repite_el_ultimo(self) -> None:
+        self.assertNotEqual(content_manager.elegir_formato("collage", ["collage", "mundo"]), "collage")
+
+    def test_sugerencia_inventada_cae_en_la_rotacion(self) -> None:
+        self.assertIn(content_manager.elegir_formato("tiktok3d", []), content_manager.FORMATOS)
+
+    def test_post_no_lleva_formato(self) -> None:
+        res = content_manager.encolar(tipo="post", gancho="Frase limpia", formato="duelo")
+        self.assertEqual(res["formato"], "")
+
+    def test_generar_manda_el_formato_en_los_props(self) -> None:
+        import json as _json
+        content_id = content_manager.encolar(tipo="video", gancho="Frase limpia", guion="A\nB",
+                                             formato="collage")["id"]
+        props = _json.loads(content_manager.generar(content_id, dry_run=True)["comando"][2])
+        self.assertEqual(props["formato"], "collage")
+
+    def test_pieza_vieja_sin_formato_sale_como_mundo(self) -> None:
+        import json as _json
+        content_id = database.enqueue_content(tipo="video", gancho="Pieza vieja", guion="A\nB",
+                                              caption="", nicho="", nota="hecha antes")
+        props = _json.loads(content_manager.generar(content_id, dry_run=True)["comando"][2])
+        self.assertEqual(props["formato"], "mundo")
+
+    def test_objeto_de_collage_viaja_en_los_planos(self) -> None:
+        self.assertEqual(content_manager.normalizar_planos([{"objeto": "tostadora"}, {"objeto": "dron"}]),
+                         [{"objeto": "tostadora"}, {}])
+
+
+
+
+class TestCarrusel(unittest.TestCase):
+    def test_laminas_portada_desarrollo_y_cierre(self) -> None:
+        laminas = content_manager.laminas_carrusel("Gancho", "Uno\nDos\nTres\nEscríbenos")
+        self.assertEqual(laminas, ["Gancho", "Uno", "Dos", "Tres", "Escríbenos"])
+        self.assertEqual(content_manager.laminas_carrusel("Gancho", ""),
+                         ["Gancho", content_manager.CIERRE_CARRUSEL_DEFECTO])
+
+    def test_archivos_carrusel_encuentra_todas_las_laminas_en_orden(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            for i in (3, 1, 2):
+                (d / f"content_0009_{i:02d}.png").write_bytes(b"x")
+            (d / "content_0010_01.png").write_bytes(b"x")
+            res = content_manager.archivos_carrusel(d / "content_0009_01.png")
+            self.assertEqual([p.name for p in res],
+                             ["content_0009_01.png", "content_0009_02.png", "content_0009_03.png"])
 
 
 if __name__ == "__main__":
