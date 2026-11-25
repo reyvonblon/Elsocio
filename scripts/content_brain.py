@@ -48,7 +48,10 @@ RESULTADOS_FILE = PROJECT_ROOT / "contexto" / "RESULTADOS_MERCADO.md"
 
 MAX_TURNOS_CONTENIDO = 2
 MAX_TOKENS_CONTENIDO = 1600
-MAX_TOKENS_PLAN_DIARIO = 4400
+# 4400 era justo el largo de un mix completo con carrusel: el 2026-11-25 la respuesta se cortó
+# en `stop=max_tokens` y se pagaron 0.1111 USD por un plan inservible (más el reintento). Un tope
+# alto no cuesta más —solo se paga lo que el modelo escribe— y evita pagar por respuestas a medias.
+MAX_TOKENS_PLAN_DIARIO = 8000
 DIAS_SIN_REPETIR_TEMA_VIDEO = 20
 
 DEFAULT_DAILY_VIDEOS = 2
@@ -270,6 +273,7 @@ def leer_config_contenido(cfg: dict[str, str]) -> dict[str, object]:
         "tiene_max_explicito": tiene_max_explicito,
         "reserva_ventas_usd": reserva_ventas,
         "max_usd_contenido": max_usd_contenido,
+        "colchon_piezas_listas": sales_agent._entero(cfg, "CONTENT_COLCHON_PIEZAS", 6),
     })
     return base
 
@@ -523,6 +527,15 @@ class CerebroContenido:
         creadas = database.content_created_today()
         if creadas >= int(self.conf["max_piezas"]):
             return f"Cuota diaria de contenido ya cumplida ({creadas}/{self.conf['max_piezas']})."
+
+        # Pensar una pieza cuesta saldo; publicarla no. Si la despensa ya tiene para varios
+        # días, ese saldo rinde más en correos. Se vuelve a crear cuando la cola baja sola.
+        colchon = int(self.conf.get("colchon_piezas_listas") or 0)
+        if colchon > 0 and database.DB_PATH.exists():
+            listas = len(database.list_content(estado="generado", limit=colchon + 1))
+            if listas >= colchon:
+                return (f"Ya hay {listas} piezas listas sin publicar (colchón {colchon}). "
+                        "El saldo rinde más en correos hasta que baje la cola.")
 
         max_usd = float(self.conf["max_usd"])
         gastado = self._gasto_hoy_usd()
