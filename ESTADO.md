@@ -20,6 +20,8 @@
 - Cola: 6 piezas generadas listas (sin el carrusel que sale hoy). Mañana el motor reparte 6 a lo largo del día.
 - Sin respuestas de prospectos todavía: 26 correos enviados, 0 interesados. Falta la 1ª venta.
 - Riesgo abierto: vaciar la cola de golpe en una cuenta de 1 seguidor es el patrón que ya hizo que Meta restringiera la cuenta anterior.
+- Las 6 piezas del 25-nov SÍ se publicaron (`quota_usage: 5` en Meta); Raymond las archivó a mano, por eso `/media` sale vacío. Ojo: archivar deja el contenido invisible y sin métricas para `sincronizar_resultados_ig`.
+- Meta unificó el 25-nov `tuparcheenvivo` + `elsociotuiaa` + Facebook en una cuenta, y el usuario pasó de `elsociotuiaa` a `elsociotuia`. Falta revisar si los proyectos vecinos comparten correo/WhatsApp/cuentas con El Socio.
 ## Descartado
 - Voces robóticas (`say`), bots/scrapers no oficiales de IG, `remotion render` directo en Monterey, Tailscale, Calendly externo, contestar ruido con saldo de IA.
 - Falsas alarmas verificadas: no hay ráfaga de correos, ni envíos de madrugada, ni acentos rotos (eso era mi vista previa).
