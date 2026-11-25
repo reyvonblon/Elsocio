@@ -9,7 +9,8 @@
 - Notificación push al celular en fallos reales (`scripts/notificar.py` + ntfy.sh, gratis): se activa solo si pones `NTFY_TOPIC` en `.env`; sin eso no hace nada. Dispara desde `database.log_agent_action` cuando la herramienta es de error o hay `bloqueado_por_guarda`.
 - 262 pruebas en verde (incluye `test_sales_agent`, `test_autonomous_brain`, `test_content_manager`; se corren con `python3 scripts/test_X.py`, no hay pytest instalado).
 ## En prueba / Pendiente
-- Cola de correo: 33 personas reales (2 días a 15/día). Buscador: ~28 personas por 104 consultas (~50 min, 0 USD) — el techo es que sitios colombianos solo publican `info@`.
+- Cola: **40 personas** (2.5 días). Rendimiento medido hoy por fuente, todas a 0 USD: buscadores 28 personas/120 consultas (~50 min) · rescate de descartados 5/95 dominios (~40 min) · OpenStreetMap **0**/48 dominios (~35 min).
+- Cuello de botella real: no es encontrar empresas, es que la PyME colombiana no publica a su gente en la web. Ninguna fuente basada en sitios lo resuelve. Sin medir: si a `info@` con mensaje para reenviar al dueño responde más que no escribirle (los 26 viejos eran buzones CON mensaje genérico: no prueban nada).
 - Sin respuestas de prospectos todavía: 0 interesados reales en `processed_replies` (solo rebotes SMTP). Falta la 1ª venta.
 - Riesgo abierto: vaciar la cola de golpe en una cuenta de 1 seguidor es el patrón que restringió la cuenta IG anterior.
 - Meta unificó `tuparcheenvivo` + `elsociotuiaa` + Facebook; usuario pasó a `elsociotuia`. Falta revisar si proyectos vecinos comparten correo/WhatsApp.
