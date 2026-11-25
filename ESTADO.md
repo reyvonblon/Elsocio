@@ -1,17 +1,24 @@
 # ESTADO
 ## Base aprobada
-- Motor y orquestador autónomo: `socio_cerebro.py` unifica en orden real: IMAP + landing (`telefono`+`correo`+`mensaje`) → `prospect_hunter.py` (MX OK) → `sales_agent.py` → SMTP (`autopilot_dispatcher.py`) → `content_brain.py` → `ig_publisher.py` → silencios/métricas reales + panel `8787`.
-- Nichos activos (Medellín, Bogotá, Cali y Barranquilla): `modelado-3d-espacios`, `fichas-tecnicas-ropa`, `ecommerce-catalogo-visual` y `automatizacion-agencias-estudios`. `sales_agent.py` recorta en código `Precio de referencia` y toda cifra; `prospect_hunter.py` intercala nichos y llena el cupo diario con MX real.
-- Landing `docs/index.html` (`telefono`+`mensaje` con `keepalive`) + `docs/firma-correo.html` (`docs/assets/logo-firma.png`) → WhatsApp + Web3Forms → `sync_landing_messages()` → Mac + Calendar.app + `sales_agent`. Gmail `elsociotuia@gmail.com` activo.
-- **Agente de ventas 6/6**: `sales_agent.py` (stdlib, Sonnet 5, topes 15 correos y `0.50 USD/día`, 6 turnos, 2 reintentos, prompt caching `ephemeral`). Alcance: cliente calificado + aviso a Raymond; precio y link de pago solo los pone Raymond (`MODO_TRABAJO.md`).
-- Guardas en CÓDIGO: precios, monedas, porcentajes, cifras pegadas/separadas, métodos de pago y links con hostname exacto; baja procesada antes de cualquier tope y sin falsos positivos; lead cerrado o `bounced=1` nunca recibe correo; frío nunca se repite.
-- `registrar_resultado_mercado()` en `RESULTADOS_MERCADO.md`: solo eventos reales (respuesta, baja, rebote permanente SMTP, silencio a 7 días y comentarios reales de IG), sanitizando celdas sin borrar historial.
-- **Contenido 3/3 + Voz Humana**: `content_queue` + `content_manager.py` + `ReelVertical` 1080x1920@30fps con 4 escenas SVG isométricas (`EscenasIsometricas.tsx`). `voice_engine.py` (stdlib) genera locución neuronal cálida en una sola toma continua (`en-US-AndrewMultilingualNeural` gratis por defecto, u OpenAI/ElevenLabs), sincroniza cada subtítulo vía `SentenceBoundary` y masteriza a `-14 LUFS` en `generar_video.sh`.
-- `content_brain.py` piensa ganchos/guiones sin repetir, leyendo dolores reales y compartiendo el mismo tope de `0.50 USD/día` (vender va primero que publicar).
-- **Instagram Oficial + Panel 8787**: `ig_publisher.py` publica solo por Meta Graph API (`IMAGE` con conversión `.png→.jpg` vía `sips` y `REELS` con polling `FINISHED`), autodescubre `IG_USER_ID` desde el token, auto-renueva tokens cada 25 días, respeta tope diario, interruptor `ig_auto_publish` y rollback limpio. `panel_server.py` sirve preview visual + conexión de claves + interruptor en WiFi `8787`; `instalar_piloto.py` configura `launchd`.
-- **209 pruebas en seco en verde** (`128` ventas + `55` contenido + `26` cerebro autónomo); huellas SHA-256 de `data/el_socio.db` y `RESULTADOS_MERCADO.md` intactas.
-## En prueba / Pendiente de encendido
-- Faltan en `.env` para operar en vivo: `ANTHROPIC_API_KEY` (enciende cerebro de ventas y contenido) y `IG_USER_ID` + `IG_ACCESS_TOKEN` (enciende publicación automática en Instagram). Gmail SMTP/IMAP ya está listo.
+- Orquestador: `socio_cerebro.py` encadena IMAP+landing → `prospect_hunter` → `sales_agent` → `autopilot_dispatcher` (SMTP) → `content_brain` → `ig_publisher` → panel `8787`.
+- Nichos (Medellín/Bogotá/Cali/Barranquilla): `modelado-3d-espacios`, `fichas-tecnicas-ropa`, `ecommerce-catalogo-visual`, `automatizacion-agencias-estudios`. Precio y link de pago: solo Raymond.
+- `sales_agent.py`: Sonnet 5 effort medium, flujo 6/6, tope 15 correos + `0.50 USD/día` compartido con contenido, prompt caching, guardas de precios/pago/cifras en código.
+- Reels: 3 formatos rotan (`mundo`/`collage`/`duelo`, `ReelAuto.tsx`), storyboard por `planos`, cierre de venta fijo en código. Voz principal: Giuseppe Multilingual (`redes/voz/voz_definitiva_socio.m4a`, ya fija en `.env`) vía `voice_engine.py`, -14 LUFS.
+- Contenido: `content_queue` + `content_manager.py` + `content_brain.py` planean mix diario (2 video + 1 post + 2 historia + 1 carrusel) en 1 llamada `ephemeral`, reservando presupuesto para ventas.
+- Carrusel (tipo nuevo): `CarruselLaminas.tsx` + `generar_carrusel.sh` → `redes/carruseles/content_NNNN_01..XX.png`; `ig_publisher` lo sube como `CAROUSEL` oficial con láminas hijas. Render probado manualmente hoy: OK.
+- IG: `ig_publisher.py` solo Meta Graph API (`IMAGE`/`REELS`/`STORIES`/`CAROUSEL`), auto-renueva token; `panel_server.py` sirve preview en `8787`.
+- 257 pruebas en seco en verde; huellas SHA-256 de la BD y `RESULTADOS_MERCADO.md` intactas en dry-run.
+- `generar_video.sh` tiene lock de carpeta (`out/.render.lock`, con detección de lock huérfano):
+  dos renders a la vez ya no pueden chocar en `out/frames` y arruinarse mutuamente (2026-11-25).
+- Motor (`com.elsocio.cerebro`, launchd cada 15 min) confirmado activo y corriendo solo.
+## En prueba / Pendiente
+- DESBLOQUEADO Meta (2026-11-25): el fallo NO era permiso de Meta. `.env` tenia `IG_USER_ID` de la
+  cuenta vieja restringida (`inmocolombia`) y `ig_publisher` solo usa el id de la BD cuando `.env` esta
+  vacio, asi que publicaba contra la cuenta mala. Corregido a `17841438802416058` (`@elsociotuia`).
+  Permisos reales: `instagram_content_publish` granted, cuota 100/dia. Primer post REAL publicado:
+  https://www.instagram.com/p/DgLMj9YFpf4/ (pieza 4). Motor sigue solo: 1 pieza cada 75 min, 6/dia.
+- Primer carrusel REAL: pieza 9 ya generada y en cola; sale sola hoy dentro del cupo.
+- Saldo IA de hoy agotado (0.5017/0.50 USD): no se crean piezas nuevas hasta manana; las 11 ya
+  generadas alcanzan para hoy y manana.
 ## Descartado
-- Voces robóticas de sistema (`say`): reemplazadas por voz neuronal humana sincronizada. Bots/scrapers no oficiales de IG: prohibidos por baneo (solo Meta Graph API).
-- `remotion render` directo en Monterey (se usa `--sequence` PNG + `ffmpeg` con autodetección de dígitos). Tailscale en Monterey (solo WiFi local `8787`). Calendly externo. Contestar ruido (`respuesta_recibida`) con saldo de IA o registrar `silencio` el mismo día del envío.
+- Voces robóticas (`say`), bots/scrapers no oficiales de IG, `remotion render` directo en Monterey, Tailscale, Calendly externo, contestar ruido con saldo de IA.

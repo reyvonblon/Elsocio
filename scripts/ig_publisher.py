@@ -9,7 +9,7 @@ o `graph.facebook.com`) con `urllib.request` de Python stdlib (0 USD, 0 SDKs):
      de macOS (Meta rechaza PNG con subcódigo 2207005; solo acepta JPEG).
   2. Obtiene una URL HTTPS pública temporal de auto-borrado en 1h (o usa
      `IG_MEDIA_BASE_URL` si se configuró dominio propio).
-  3. Crea el contenedor oficial (`IMAGE` o `REELS`), espera a `status_code=FINISHED`
+  3. Crea el contenedor oficial (`IMAGE`, `REELS`, `STORIES` o `CAROUSEL` con sus láminas hijas), espera a `status_code=FINISHED`
      y publica con `/{IG_USER_ID}/media_publish`.
   4. Guardas duras en código:
      - Revisa `revisar_guarda_precios()` sobre gancho + caption antes de publicar.
@@ -29,6 +29,7 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import time
@@ -62,16 +63,19 @@ class ErrorIG(Exception):
 DIAS_RENOVACION_TOKEN = 25
 
 
+_CLAVES_IG_AJUSTABLES = (
+    "IG_MAX_DAILY_POSTS",
+    "IG_DAILY_VIDEOS",
+    "IG_DAILY_POSTS",
+    "IG_DAILY_STORIES",
+    "IG_DAILY_CAROUSELS",
+    "IG_MIN_INTERVAL_MINUTES",
+)
+
+
 def cargar_config_ig() -> dict[str, str]:
     """Lee configuración desde `.env` + `settings` local sin exponer jamás el token."""
     cfg = autopilot_dispatcher.load_env_file()
-    for clave in (
-        "IG_USER_ID", "IG_ACCESS_TOKEN", "IG_GRAPH_HOST",
-        "IG_MAX_DAILY_POSTS", "IG_AUTO_PUBLISH", "IG_MEDIA_BASE_URL",
-    ):
-        if os.environ.get(clave):
-            cfg[clave] = os.environ[clave]
-
     if database.DB_PATH.exists():
         try:
             ajustes = database.get_settings()
@@ -79,14 +83,54 @@ def cargar_config_ig() -> dict[str, str]:
             tok_bd = (ajustes.get("ig_access_token") or "").strip()
             if tok_bd and (ajustes.get("ig_token_refreshed_at") or not (cfg.get("IG_ACCESS_TOKEN") or "").strip()):
                 cfg["IG_ACCESS_TOKEN"] = tok_bd
+            # El id de la BD es el que el propio token autodescubrió y confirmó contra Meta:
+            # si `.env` quedó con el id de una cuenta vieja, publicar contra ella falla ("User
+            # access is restricted"). Por eso la BD manda sobre `.env` cuando los dos difieren.
             uid_bd = (ajustes.get("ig_user_id") or "").strip()
-            if uid_bd and not (cfg.get("IG_USER_ID") or "").strip():
+            if uid_bd and uid_bd != (cfg.get("IG_USER_ID") or "").strip():
                 cfg["IG_USER_ID"] = uid_bd
             if ajustes.get("ig_username"):
                 cfg["IG_USERNAME"] = ajustes["ig_username"]
+            for clave in _CLAVES_IG_AJUSTABLES:
+                k_bd = clave.lower()
+                if ajustes.get(k_bd) and not cfg.get(clave):
+                    cfg[clave] = str(ajustes[k_bd])
         except Exception:
             pass
+
+    for clave in (
+        "IG_USER_ID", "IG_ACCESS_TOKEN", "IG_GRAPH_HOST",
+        "IG_AUTO_PUBLISH", "IG_MEDIA_BASE_URL", *_CLAVES_IG_AJUSTABLES,
+    ):
+        if os.environ.get(clave):
+            cfg[clave] = os.environ[clave]
     return cfg
+
+
+def limites_diarios_ig(cfg: dict[str, str]) -> dict[str, object]:
+    """Topes diarios de publicación (por defecto: 2 Reels + 1 Post + 2 Historias = 5/día)."""
+    max_videos = sales_agent._entero(cfg, "IG_DAILY_VIDEOS", 2)
+    max_posts = sales_agent._entero(cfg, "IG_DAILY_POSTS", 1)
+    max_historias = sales_agent._entero(cfg, "IG_DAILY_STORIES", 2)
+    max_carruseles = sales_agent._entero(cfg, "IG_DAILY_CAROUSELS", 1)
+    suma_mix = max_videos + max_posts + max_historias + max_carruseles
+
+    tiene_total_explicito = bool(str(cfg.get("IG_MAX_DAILY_POSTS") or "").strip())
+    max_total = (
+        sales_agent._entero(cfg, "IG_MAX_DAILY_POSTS", suma_mix)
+        if tiene_total_explicito else suma_mix
+    )
+    usa_por_tipo = (not tiene_total_explicito) or any(
+        bool(str(cfg.get(k) or "").strip())
+        for k in ("IG_DAILY_VIDEOS", "IG_DAILY_POSTS", "IG_DAILY_STORIES", "IG_DAILY_CAROUSELS")
+    )
+    return {
+        "total": max_total,
+        "usa_por_tipo": usa_por_tipo,
+        "por_tipo": {"video": max_videos, "post": max_posts, "historia": max_historias,
+                     "carrusel": max_carruseles},
+        "min_interval_min": sales_agent._entero(cfg, "IG_MIN_INTERVAL_MINUTES", 75),
+    }
 
 
 def modo_autonomo_activo(cfg: dict[str, str] | None = None) -> bool:
@@ -115,16 +159,23 @@ def estado_ig(cfg: dict[str, str] | None = None) -> dict[str, object]:
     cfg = cargar_config_ig() if cfg is None else cfg
     user_id = (cfg.get("IG_USER_ID") or "").strip()
     token = (cfg.get("IG_ACCESS_TOKEN") or "").strip()
-    max_posts = sales_agent._entero(cfg, "IG_MAX_DAILY_POSTS", 1)
+    lims = limites_diarios_ig(cfg)
     publicados_hoy = database.ig_published_today() if database.DB_PATH.exists() else 0
+    por_tipo_hoy = (
+        database.ig_published_today_by_tipo()
+        if database.DB_PATH.exists()
+        else {"video": 0, "post": 0, "historia": 0, "carrusel": 0}
+    )
     return {
         # Con el token basta: si falta IG_USER_ID, se autodescubre solo vía API oficial.
         "credenciales_listas": bool(token),
         "user_id_resuelto": bool(user_id),
         "username": (cfg.get("IG_USERNAME") or "").strip(),
         "auto_publish": modo_autonomo_activo(cfg),
-        "max_daily_posts": max_posts,
+        "max_daily_posts": int(lims["total"]),
+        "cuota_por_tipo": lims["por_tipo"],
         "publicados_hoy": publicados_hoy,
+        "publicados_por_tipo": por_tipo_hoy,
         "graph_base": _url_base_graph(cfg),
     }
 
@@ -171,19 +222,78 @@ def preparar_archivo_para_meta(ruta: Path) -> Path:
     raise ErrorIG(f"Formato no soportado por Instagram Graph API: {sufijo}")
 
 
-def obtener_url_publica_https(ruta: Path, cfg: dict[str, str]) -> str:
-    """Devuelve una URL `https://` accesible por los servidores de Meta.
+GH_PAGES_DOCS_DIR = PROJECT_ROOT / "docs" / "ig-media"
+GH_PAGES_BASE_URL = "https://reyvonblon.github.io/Elsocio/ig-media"
+GH_PAGES_MAX_ARCHIVOS = 15  # conserva solo los últimos N; poda los viejos en cada subida
+GH_PAGES_TIMEOUT_DEPLOY_SEG = 90
 
-    Si `IG_MEDIA_BASE_URL` está configurada, arma la URL desde ahí.
-    Si no, sube el archivo de forma efímera (se autodestruye en 1 hora) vía HTTPS
-    usando `multipart/form-data` en stdlib puro.
-    """
-    base_propia = (cfg.get("IG_MEDIA_BASE_URL") or "").strip().rstrip("/")
-    if base_propia:
-        if not base_propia.startswith("https://"):
-            raise ErrorIG("IG_MEDIA_BASE_URL debe empezar por https://")
-        return f"{base_propia}/{urllib.parse.quote(ruta.name)}"
 
+def _ejecutar_git(args: list[str]) -> str:
+    resultado = subprocess.run(
+        ["git", *args], cwd=str(PROJECT_ROOT), check=True, timeout=30,
+        capture_output=True, text=True,
+    )
+    return resultado.stdout
+
+
+def _podar_media_vieja_github_pages() -> list[str]:
+    """Mantiene el repo liviano: solo conserva las últimas `GH_PAGES_MAX_ARCHIVOS` piezas."""
+    if not GH_PAGES_DOCS_DIR.is_dir():
+        return []
+    archivos = sorted(GH_PAGES_DOCS_DIR.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
+    borrados = []
+    for p in archivos[GH_PAGES_MAX_ARCHIVOS:]:
+        p.unlink(missing_ok=True)
+        borrados.append(str(p.relative_to(PROJECT_ROOT)))
+    return borrados
+
+
+def subir_a_github_pages(ruta: Path) -> str:
+    """Alternativa propia y confiable a servicios gratis de terceros: publica el archivo en
+    `docs/ig-media/` (el mismo GitHub Pages que ya sirve la landing) con un commit+push que
+    SOLO toca esa carpeta, y espera a que el deploy esté en vivo antes de devolver la URL
+    (Meta tiene que poder bajarla ya mismo, no en un rato)."""
+    GH_PAGES_DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    destino = GH_PAGES_DOCS_DIR / ruta.name
+    shutil.copy2(ruta, destino)
+    borrados = _podar_media_vieja_github_pages()
+    rel_nuevo = str(destino.relative_to(PROJECT_ROOT))
+
+    try:
+        _ejecutar_git(["add", "--", rel_nuevo, *borrados])
+        pendiente = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"], cwd=str(PROJECT_ROOT), timeout=15,
+        ).returncode != 0
+        if pendiente:
+            _ejecutar_git(["commit", "-m", f"Media IG: {ruta.name}"])
+            # `-c http.version=HTTP/1.1 -c http.postBuffer=524288000`: sin esto, el push de
+            # binarios (video/imagen) corta la conexión a mitad con "unexpected disconnect
+            # while reading sideband packet" en esta red — probado y confirmado en vivo.
+            _ejecutar_git([
+                "-c", "http.version=HTTP/1.1", "-c", "http.postBuffer=524288000",
+                "push", "origin", "HEAD:main",
+            ])
+    except subprocess.CalledProcessError as exc:
+        raise ErrorIG(f"git falló publicando en GitHub Pages: {(exc.stderr or '')[:300]}") from None
+    except subprocess.TimeoutExpired:
+        raise ErrorIG("git tardó demasiado publicando en GitHub Pages.") from None
+
+    url = f"{GH_PAGES_BASE_URL}/{urllib.parse.quote(ruta.name)}"
+    desde = time.time()
+    while time.time() - desde < GH_PAGES_TIMEOUT_DEPLOY_SEG:
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                if resp.status == 200:
+                    return url
+        except urllib.error.URLError:
+            pass
+        time.sleep(5)
+    raise ErrorIG(f"GitHub Pages no sirvió '{ruta.name}' a tiempo (>{GH_PAGES_TIMEOUT_DEPLOY_SEG}s).")
+
+
+def _subir_litterbox(ruta: Path) -> str:
+    """Último recurso: servicio gratis de terceros, efímero (se autodestruye en 1h) y sin
+    garantía de disponibilidad — úsalo solo si GitHub Pages falló."""
     limite = "----ElSocioBoundary" + secrets.token_hex(12)
     mime = mimetypes.guess_type(ruta.name)[0] or "application/octet-stream"
     contenido = ruta.read_bytes()
@@ -222,6 +332,30 @@ def obtener_url_publica_https(ruta: Path, cfg: dict[str, str]) -> str:
     if not url.startswith("https://"):
         raise ErrorIG(f"El servidor temporal no devolvió una URL HTTPS válida: {url[:120]}")
     return url
+
+
+def obtener_url_publica_https(ruta: Path, cfg: dict[str, str]) -> str:
+    """Devuelve una URL `https://` accesible por los servidores de Meta.
+
+    Orden: 1) `IG_MEDIA_BASE_URL` si la configuraste a mano, 2) GitHub Pages de este mismo
+    repo (confiable, bajo tu control), 3) un servicio gratis de terceros como último recurso
+    (efímero y sin garantía — puede estar caído sin que sea culpa tuya).
+    """
+    base_propia = (cfg.get("IG_MEDIA_BASE_URL") or "").strip().rstrip("/")
+    if base_propia:
+        if not base_propia.startswith("https://"):
+            raise ErrorIG("IG_MEDIA_BASE_URL debe empezar por https://")
+        return f"{base_propia}/{urllib.parse.quote(ruta.name)}"
+
+    try:
+        return subir_a_github_pages(ruta)
+    except ErrorIG as error_github:
+        try:
+            return _subir_litterbox(ruta)
+        except ErrorIG as error_litterbox:
+            raise ErrorIG(
+                f"GitHub Pages: {error_github}. Litterbox (respaldo): {error_litterbox}"
+            ) from None
 
 
 # ------------------------------------------------ llamadas a Meta Graph API
@@ -378,14 +512,132 @@ def renovar_token_ig_si_toca(
     return {"renovado": True}
 
 
+# ------------------------------------------------ aprendizaje real: horario y hashtags
+
+# Semilla inicial manual (NO es "tendencia" verificada, es punto de partida honesto mientras
+# se junta desempeño real de la cuenta). Se reemplaza sola por los hashtags con mejor
+# like+comentarios reales en cuanto hay >=5 publicaciones con datos.
+_HASHTAGS_SEMILLA = [
+    "marketingdigital", "pymes", "emprendedores", "negociosonline",
+    "automatizacion", "redessociales", "marcapersonal", "contenidodigital",
+]
+
+
+def obtener_mejores_horas_ig(cfg: dict[str, str] | None = None, *, forzar: bool = False) -> dict[str, object]:
+    """Aprende de Meta (`online_followers`, dato oficial real) a qué hora UTC hay más
+    seguidores conectados, y lo guarda para que `ciclo_publicacion_autonoma` lo use.
+    Se cachea ~20h porque Meta solo actualiza esta métrica una vez al día.
+    """
+    cfg = cargar_config_ig() if cfg is None else cfg
+    database.init_db()
+    ajustes = database.get_settings()
+    if not forzar:
+        marca = (ajustes.get("ig_mejores_horas_actualizado") or "").strip()
+        if marca:
+            try:
+                if (datetime.now() - datetime.strptime(marca, "%Y-%m-%d %H:%M:%S")) < timedelta(hours=20):
+                    return {"ok": True, "desde_cache": True}
+            except ValueError:
+                pass
+
+    user_id = (cfg.get("IG_USER_ID") or "").strip()
+    token = (cfg.get("IG_ACCESS_TOKEN") or "").strip()
+    if not user_id or not token:
+        return {"ok": False, "error": "Falta IG_USER_ID o IG_ACCESS_TOKEN."}
+
+    base = _url_base_graph(cfg)
+    try:
+        datos = _graph_get(
+            f"{base}/{user_id}/insights", {"metric": "online_followers", "period": "lifetime"}, token,
+        )
+    except ErrorIG as exc:
+        return {"ok": False, "error": str(exc)}
+
+    valores = (((datos.get("data") or [{}])[0]).get("values") or [])
+    por_hora = (valores[-1].get("value") if valores else None) or {}
+    if not por_hora:
+        return {"ok": False, "error": "Meta aún no tiene datos de 'online_followers' (cuenta nueva o pocos seguidores)."}
+
+    ranking = sorted(((int(h), int(v)) for h, v in por_hora.items()), key=lambda hv: -hv[1])
+    mejores_utc = [h for h, _ in ranking[:6]]
+    database.update_settings({
+        "ig_mejores_horas_utc": json.dumps(mejores_utc),
+        "ig_mejores_horas_actualizado": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+    return {"ok": True, "mejores_horas_utc": mejores_utc, "por_hora": por_hora}
+
+
+def _mejor_momento_para_publicar(cfg: dict[str, str]) -> tuple[bool, str]:
+    """True si ahora es buena hora (o no hay dato aún). False = esperar una hora mejor hoy."""
+    if not database.DB_PATH.exists():
+        return True, "sin_bd"
+    crudo = (database.get_settings().get("ig_mejores_horas_utc") or "").strip()
+    if not crudo:
+        return True, "sin_datos_de_horario_aun"
+    try:
+        mejores = {int(h) for h in json.loads(crudo)}
+    except (ValueError, TypeError):
+        return True, "datos_de_horario_invalidos"
+    if not mejores:
+        return True, "sin_datos_de_horario_aun"
+    hora_utc = datetime.utcnow().hour
+    if hora_utc in mejores:
+        return True, "hora_optima_segun_seguidores_reales"
+    if any(h > hora_utc for h in mejores):
+        return False, "esperando_mejor_hora_hoy_segun_seguidores_reales"
+    return True, "no_quedan_horas_optimas_hoy"
+
+
+def _extraer_hashtags(texto: str) -> list[str]:
+    return [m.lower() for m in re.findall(r"#(\w+)", texto or "")]
+
+
+def obtener_mejores_hashtags_ig(top_n: int = 6) -> list[str]:
+    """Hashtags propios con mejor like+comentarios reales hasta ahora. Si aún no hay
+    suficiente historial propio, usa la semilla manual (declarada como estimación, no dato real)."""
+    crudo = (database.get_settings().get("ig_hashtags_rendimiento") or "").strip() if database.DB_PATH.exists() else ""
+    puntajes: dict[str, float] = {}
+    if crudo:
+        try:
+            puntajes = {str(k): float(v) for k, v in json.loads(crudo).items()}
+        except (ValueError, TypeError):
+            puntajes = {}
+    if len(puntajes) < 5:
+        return list(_HASHTAGS_SEMILLA[:top_n])
+    return [tag for tag, _ in sorted(puntajes.items(), key=lambda kv: -kv[1])[:top_n]]
+
+
+def registrar_rendimiento_hashtags(hashtags: list[str], *, likes: int, comentarios: int) -> None:
+    if not hashtags:
+        return
+    database.init_db()
+    crudo = (database.get_settings().get("ig_hashtags_rendimiento") or "").strip()
+    try:
+        puntajes: dict[str, float] = json.loads(crudo) if crudo else {}
+    except (ValueError, TypeError):
+        puntajes = {}
+    puntaje_pieza = float(likes) + float(comentarios) * 3.0
+    for tag in hashtags:
+        puntajes[tag] = puntajes.get(tag, 0.0) + puntaje_pieza
+    database.update_settings({"ig_hashtags_rendimiento": json.dumps(puntajes, ensure_ascii=False)})
+
+
 # ------------------------------------------------ publicación con guardas duras
 
-def armar_caption_ig(pieza: dict) -> str:
+def armar_caption_ig(pieza: dict) -> tuple[str, list[str]]:
+    """Devuelve (caption_final, hashtags_usados). Los hashtags van en bloque aparte al
+    final (nunca mezclados en el gancho/guion) para no romper la regla de 'sin hashtags
+    basura' del texto en pantalla ni la voz humana del copy."""
     caption = str(pieza.get("caption") or "").strip()
     gancho = str(pieza.get("gancho") or "").strip()
-    if caption and gancho.lower() not in caption.lower():
-        return f"{gancho}\n\n{caption}".strip()
-    return caption or gancho
+    base = f"{gancho}\n\n{caption}".strip() if (caption and gancho.lower() not in caption.lower()) else (caption or gancho)
+    if str(pieza.get("tipo") or "").strip().lower() == "historia":
+        return base, []  # las historias no llevan hashtags visibles
+    hashtags = obtener_mejores_hashtags_ig()
+    if not hashtags:
+        return base, []
+    bloque = " ".join(f"#{h}" for h in hashtags)
+    return f"{base}\n\n.\n.\n{bloque}".strip(), hashtags
 
 
 def publicar_pieza_ig(
@@ -403,7 +655,7 @@ def publicar_pieza_ig(
     if pieza["estado"] != "generado" or not (pieza.get("archivo") or "").strip():
         return {"publicado": False, "error": f"La pieza #{content_id} aún no está renderizada ('{pieza['estado']}')."}
 
-    caption_final = armar_caption_ig(pieza)
+    caption_final, hashtags_usados = armar_caption_ig(pieza)
     _, etiquetas_nota = content_manager.leer_reel(pieza.get("nota"))
     motivos = sales_agent.revisar_guarda_precios(
         pieza["gancho"], pieza.get("guion") or "", caption_final, *etiquetas_nota
@@ -414,7 +666,8 @@ def publicar_pieza_ig(
             database.update_content(content_id, error_ig=f"BLOQUEADO por guarda: {detalle}")
         return {"publicado": False, "bloqueado_por_guarda": True, "error": detalle}
 
-    max_posts = sales_agent._entero(cfg, "IG_MAX_DAILY_POSTS", 1)
+    lims = limites_diarios_ig(cfg)
+    max_posts = int(lims["total"])
     publicados_hoy = database.ig_published_today()
     if publicados_hoy >= max_posts:
         return {
@@ -422,21 +675,38 @@ def publicar_pieza_ig(
             "error": f"Tope diario de publicaciones en Instagram alcanzado ({publicados_hoy}/{max_posts}).",
         }
 
+    tipo_pieza = str(pieza.get("tipo") or "post").strip().lower()
+    if bool(lims["usa_por_tipo"]):
+        por_tipo_hoy = database.ig_published_today_by_tipo()
+        tope_tipo = int((lims["por_tipo"] or {}).get(tipo_pieza, max_posts))
+        if int(por_tipo_hoy.get(tipo_pieza, 0)) >= tope_tipo:
+            return {
+                "publicado": False,
+                "error": (
+                    f"Tope diario de '{tipo_pieza}' en Instagram alcanzado "
+                    f"({por_tipo_hoy.get(tipo_pieza, 0)}/{tope_tipo})."
+                ),
+            }
+
     ruta_local = Path(str(pieza["archivo"]))
     user_id = (cfg.get("IG_USER_ID") or "").strip()
     token = (cfg.get("IG_ACCESS_TOKEN") or "").strip()
     base_graph = _url_base_graph(cfg)
 
     if dry_run:
+        media_type_dry = {
+            "video": "REELS", "historia": "STORIES", "carrusel": "CAROUSEL",
+        }.get(tipo_pieza, "IMAGE")
         return {
             "publicado": False,
             "dry_run": True,
             "id": content_id,
-            "tipo": pieza["tipo"],
+            "tipo": tipo_pieza,
+            "media_type": media_type_dry,
             "archivo": str(ruta_local),
             "credenciales_listas": bool(token),
             "graph_endpoint": f"{base_graph}/{user_id or '<AUTO_IG_USER_ID>'}/media",
-            "caption_preview": caption_final[:160],
+            "caption_preview": "" if tipo_pieza == "historia" else caption_final[:160],
         }
 
     if not token:
@@ -454,16 +724,54 @@ def publicar_pieza_ig(
         if not user_id:
             desc = descubrir_cuenta_ig(token, cfg)
             user_id = desc["user_id"]
-        archivo_meta = preparar_archivo_para_meta(ruta_local)
-        url_publica = obtener_url_publica_https(archivo_meta, cfg)
+        if tipo_pieza == "carrusel":
+            laminas = content_manager.archivos_carrusel(ruta_local)
+            if len(laminas) < 2:
+                raise ErrorIG("El carrusel necesita al menos 2 láminas renderizadas.")
+            hijos: list[str] = []
+            for lamina in laminas[:10]:  # Meta admite máximo 10 elementos por carrusel
+                url_lamina = obtener_url_publica_https(preparar_archivo_para_meta(lamina), cfg)
+                hijo = _graph_post(
+                    f"{base_graph}/{user_id}/media",
+                    {"image_url": url_lamina, "is_carousel_item": "true"},
+                    token,
+                )
+                hijo_id = str(hijo.get("id") or "").strip()
+                if not hijo_id:
+                    raise ErrorIG("Meta no devolvió `id` para una lámina del carrusel.")
+                _esperar_contenedor_listo(base_graph, hijo_id, token)
+                hijos.append(hijo_id)
+            archivo_meta = ruta_local
+            url_publica = ""
+        else:
+            archivo_meta = preparar_archivo_para_meta(ruta_local)
+            url_publica = obtener_url_publica_https(archivo_meta, cfg)
 
-        if pieza["tipo"] == "video":
+        if tipo_pieza == "carrusel":
+            params_contenedor = {
+                "media_type": "CAROUSEL",
+                "children": ",".join(hijos),
+                "caption": caption_final,
+            }
+        elif tipo_pieza == "video":
             params_contenedor = {
                 "media_type": "REELS",
                 "video_url": url_publica,
                 "caption": caption_final,
                 "share_to_feed": "true",
             }
+        elif tipo_pieza == "historia":
+            # Meta Graph API oficial: STORIES no admite `caption` ni `share_to_feed`.
+            if archivo_meta.suffix.lower() == ".mp4":
+                params_contenedor = {
+                    "media_type": "STORIES",
+                    "video_url": url_publica,
+                }
+            else:
+                params_contenedor = {
+                    "media_type": "STORIES",
+                    "image_url": url_publica,
+                }
         else:
             params_contenedor = {
                 "image_url": url_publica,
@@ -498,18 +806,49 @@ def publicar_pieza_ig(
 
     database.update_content(
         content_id, estado="publicado", ig_media_id=ig_media_id, error_ig="",
+        hashtags_ig=",".join(hashtags_usados),
     )
     database.log_agent_action(
         lead_id=None, turno=0, modelo="meta-graph-api",
         herramienta="ig_publish",
-        argumentos=json.dumps({"content_id": content_id, "tipo": pieza["tipo"]}, ensure_ascii=False),
+        argumentos=json.dumps({"content_id": content_id, "tipo": tipo_pieza}, ensure_ascii=False),
         resultado=f"publicado ig_media_id={ig_media_id}", costo_usd=0.0,
     )
-    return {"publicado": True, "id": content_id, "ig_media_id": ig_media_id}
+    return {"publicado": True, "id": content_id, "tipo": tipo_pieza, "ig_media_id": ig_media_id}
+
+
+def _elegir_pieza_para_publicar(listas: list[dict], cfg: dict[str, str]) -> dict | None:
+    """Elige la pieza más antigua cuyo formato aún tenga cupo hoy, alternando respecto a la última."""
+    if not listas:
+        return None
+    lims = limites_diarios_ig(cfg)
+    usa_por_tipo = bool(lims["usa_por_tipo"])
+    por_tipo_hoy = database.ig_published_today_by_tipo() if database.DB_PATH.exists() else {}
+    topes_tipo = dict(lims["por_tipo"] or {})
+
+    # Orden FIFO real (más antigua primero)
+    candidatas_fifo = list(reversed(listas))
+    elegibles = []
+    for p in candidatas_fifo:
+        t = str(p.get("tipo") or "post").strip().lower()
+        if usa_por_tipo and int(por_tipo_hoy.get(t, 0)) >= int(topes_tipo.get(t, 0)):
+            continue
+        elegibles.append(p)
+
+    if not elegibles:
+        return None
+
+    publicadas_recientes = database.list_content(estado="publicado", limit=1) if database.DB_PATH.exists() else []
+    ultimo_tipo = str(publicadas_recientes[0].get("tipo") or "") if publicadas_recientes else ""
+    if ultimo_tipo:
+        for p in elegibles:
+            if str(p.get("tipo") or "") != ultimo_tipo:
+                return p
+    return elegibles[0]
 
 
 def ciclo_publicacion_autonoma(*, cfg: dict[str, str] | None = None, dry_run: bool = False) -> dict:
-    """Publica hasta el tope diario si `ig_auto_publish` está activo y hay piezas listas."""
+    """Publica respetando el tope diario total/por tipo, pausa orgánica e interruptor."""
     cfg = cargar_config_ig() if cfg is None else cfg
     if dry_run and not database.DB_PATH.exists():
         return {"ejecutado": False, "dry_run": True, "razon": "dry_run_sin_bd"}
@@ -522,21 +861,86 @@ def ciclo_publicacion_autonoma(*, cfg: dict[str, str] | None = None, dry_run: bo
     if int(est["publicados_hoy"]) >= int(est["max_daily_posts"]):
         return {"ejecutado": False, "dry_run": dry_run, "razon": "tope_diario_ig_alcanzado", "estado": est}
 
+    if not dry_run and est["credenciales_listas"]:
+        try:
+            obtener_mejores_horas_ig(cfg)
+        except Exception:
+            pass  # el aprendizaje de horario nunca debe bloquear la publicación
+
+    es_buen_momento, razon_horario = _mejor_momento_para_publicar(cfg)
+    if not es_buen_momento:
+        return {"ejecutado": False, "dry_run": dry_run, "razon": razon_horario, "estado": est}
+
+    # Pausa orgánica entre publicaciones del mismo día para no saturar en un solo minuto.
+    lims = limites_diarios_ig(cfg)
+    min_pausa = int(lims["min_interval_min"])
+    if min_pausa > 0 and int(est["publicados_hoy"]) > 0 and database.DB_PATH.exists():
+        ultima_dt = database.last_ig_published_datetime()
+        if ultima_dt and (datetime.now() - ultima_dt) < timedelta(minutes=min_pausa):
+            return {
+                "ejecutado": False,
+                "dry_run": dry_run,
+                "razon": "pausa_organica_entre_publicaciones",
+                "estado": est,
+            }
+
     # Primero genera cualquier pieza aprobada que aún no tenga archivo renderizado.
     if not dry_run:
-        aprobadas = database.list_content(estado="aprobado", limit=3)
-        for p in reversed(aprobadas):
+        aprobadas = list(reversed(database.list_content(estado="aprobado", limit=8)))
+        videos_hechos = 0
+        for p in aprobadas:
+            es_video = p.get("tipo") == "video"
+            if es_video and videos_hechos >= 1:
+                continue
             content_manager.generar(int(p["id"]))
-            break
+            if es_video:
+                videos_hechos += 1
 
-    listas = database.list_content(estado="generado", limit=10)
+    listas = database.list_content(estado="generado", limit=25)
     if not listas:
         return {"ejecutado": False, "dry_run": dry_run, "razon": "sin_piezas_generadas", "estado": est}
 
-    # La más antigua lista sale primero (FIFO).
-    elegida = listas[-1]
+    elegida = _elegir_pieza_para_publicar(listas, cfg)
+    if not elegida:
+        return {"ejecutado": False, "dry_run": dry_run, "razon": "tope_por_tipo_ig_alcanzado", "estado": est}
+
     res = publicar_pieza_ig(int(elegida["id"]), cfg=cfg, dry_run=dry_run)
+    if not dry_run:
+        if res.get("publicado"):
+            database.update_settings({"ig_fallo_desde": "", "ig_fallo_ultimo_aviso": ""})
+        elif res.get("error") and not res.get("bloqueado_por_guarda"):
+            _avisar_si_fallo_persistente(str(res["error"]))
     return {"ejecutado": True, "dry_run": dry_run, "pieza_id": int(elegida["id"]), "resultado": res}
+
+
+def _avisar_si_fallo_persistente(error_txt: str) -> None:
+    """Si Instagram lleva >1h fallando seguido, un solo aviso en el Mac cada 3h (no spamea)."""
+    database.init_db()
+    ajustes = database.get_settings()
+    ahora = datetime.now()
+    desde_txt = (ajustes.get("ig_fallo_desde") or "").strip()
+    if not desde_txt:
+        database.update_settings({"ig_fallo_desde": ahora.strftime("%Y-%m-%d %H:%M:%S")})
+        return
+    try:
+        desde = datetime.strptime(desde_txt, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        database.update_settings({"ig_fallo_desde": ahora.strftime("%Y-%m-%d %H:%M:%S")})
+        return
+    if (ahora - desde) < timedelta(hours=1):
+        return
+    ultimo_aviso_txt = (ajustes.get("ig_fallo_ultimo_aviso") or "").strip()
+    if ultimo_aviso_txt:
+        try:
+            if (ahora - datetime.strptime(ultimo_aviso_txt, "%Y-%m-%d %H:%M:%S")) < timedelta(hours=3):
+                return
+        except ValueError:
+            pass
+    if autopilot_dispatcher.notify_mac_desktop(
+        "Instagram no está publicando",
+        f"Lleva más de 1h fallando: {error_txt[:140]}",
+    ):
+        database.update_settings({"ig_fallo_ultimo_aviso": ahora.strftime("%Y-%m-%d %H:%M:%S")})
 
 
 def sincronizar_resultados_ig(
@@ -560,9 +964,12 @@ def sincronizar_resultados_ig(
     ya_registradas = set(re.findall(r"\[(ig #[0-9]+)\]", texto_actual))
 
     corte = datetime.now() - timedelta(days=max(1, dias_silencio))
-    publicadas = database.list_content(estado="publicado", limit=40)
+    publicadas = database.list_content(estado="publicado", limit=50)
     registradas = 0
     for p in publicadas:
+        # Las historias caducan en 24h y no tienen hilo público de comentarios en Graph API.
+        if str(p.get("tipo") or "").strip().lower() == "historia":
+            continue
         marca = f"ig #{p['id']}"
         if marca in ya_registradas or not (p.get("ig_media_id") or "").strip():
             continue
@@ -582,6 +989,19 @@ def sincronizar_resultados_ig(
 
         comentarios = int(datos.get("comments_count") or 0)
         likes = int(datos.get("like_count") or 0)
+
+        hashtags_pieza = [h for h in (p.get("hashtags_ig") or "").split(",") if h]
+        if hashtags_pieza:
+            contados_crudo = (database.get_settings().get("ig_hashtags_ya_contados") or "").strip()
+            try:
+                contados = set(json.loads(contados_crudo)) if contados_crudo else set()
+            except (ValueError, TypeError):
+                contados = set()
+            if marca not in contados:
+                registrar_rendimiento_hashtags(hashtags_pieza, likes=likes, comentarios=comentarios)
+                contados.add(marca)
+                database.update_settings({"ig_hashtags_ya_contados": json.dumps(sorted(contados))})
+
         if comentarios > 0:
             res = autopilot_dispatcher.registrar_resultado_mercado(
                 p.get("nicho") or "(general)", p["gancho"], "instagram",
