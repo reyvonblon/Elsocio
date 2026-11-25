@@ -45,7 +45,7 @@ BLOCKED_DOMAINS = {
     "tripadvisor.com", "tripadvisor.co", "booking.com", "airbnb.com", "expedia.com",
     "wix.com", "wixpress.com", "squarespace.com", "wordpress.com", "wordpress.org",
     "shopify.com", "myshopify.com", "godaddy.com", "cloudflare.com", "sentry.io",
-    "example.com", "ejemplo.com", "prueba.com", "email.com", "correo.com", "dominio.com", "tudominio.com",
+    "example.com", "ejemplo.com", "prueba.com", "tuempresa.com", "miempresa.com", "email.com", "correo.com", "dominio.com", "tudominio.com",
     "duckduckgo.com", "bing.com", "microsoft.com", "yahoo.com",
     "amazon.com", "canva.com", "eventbrite.com", "eventbrite.co", "meetup.com",
     "foursquare.com", "behance.net", "dribbble.com", "linktr.ee", "medium.com",
@@ -436,6 +436,7 @@ PREFIJOS_BUZON_EMPRESA = {
     # Variantes en inglés, comunes en estudios y agencias colombianas.
     "contact", "hello", "hi", "support", "sales", "team", "office", "mail", "email",
     "enquiries", "inquiries", "studio", "work", "general", "bookings", "press",
+    "commercial", "marketing", "nombre", "tunombre", "tuempresa",
 }
 
 _PARTICULAS_NOMBRE = {"de", "del", "la", "las", "los", "van", "da", "di"}
