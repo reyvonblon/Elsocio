@@ -5,30 +5,14 @@
 - Correo: 15/día máx, 1 cada 15-16 min, ventana 8-21 hora local. Guardas de precios/cifras en código.
 - Reels: 3 formatos rotan (`ReelAuto.tsx`), voz Giuseppe Multilingual fija, -14 LUFS. Carrusel vía `CarruselLaminas.tsx`.
 - IG: solo Meta Graph API, token auto-renovado. Cuenta real `@elsociotuia` id `17841438802416058`.
-- 262 pruebas en verde.
-## Lo que se arregló el 2026-11-25 (resumen)
-- IG publicaba contra la cuenta vieja restringida (`IG_USER_ID` de `inmocolombia` en `.env`). Corregido.
-- Rebotes diferidos del `mailer-daemon` ya se detectan y cortan. Correo a 600px y `From` con nombre.
-- El buscador premiaba los buzones genéricos: invertido a persona +60/+35, buzón +10.
-- Presupuesto repartido (ventas 0.41 / contenido 0.09, colchón 6 piezas). IG a 3 piezas/día.
-
-## Lo que se arregló el 2026-11-26 (prospectos)
-- `prospect_hunter.py` corrido a mano NO guardaba nada: imprimía 45 prospectos reales y los tiraba. Nuevo `--guardar`.
-- Filtro duro: si un sitio no publica a una persona, se descarta el sitio. Antes el buzón de empresa se aceptaba "de últimas" y por eso seguían entrando `info@`, `hola@`, `ventas@`.
-- Bug que botaba gente real: un correo que termina en números (`camilacarmona27@`) se partía con un espacio al final y fallaba `.isalpha()`.
-- Escapes JSON del HTML: entraba `u003einfo@megapredios.com.co` como si fuera persona.
-- Saludo más seguro: si el nombre es dudoso (`fpedraza`, `luisalfesp` = Luis o Luisa) saluda a la empresa, no inventa.
-- Marcas que pasaban como persona: `cafealtoperfil`, `acuattro`, `taro`, `ccialviva`, `weare.cuero`, `papeleria.pdepapel`. Ahora fuera.
-- Consultas de búsqueda ampliadas de 48 a 104 (Bucaramanga, Pereira, Cartagena, Manizales + verticales nuevos: ropa infantil/deportiva, cocinas, stands, fotografía de producto, eventos, mascotas).
-- El reponedor solo buscaba para el día: la cola amanecía en cero y el buscador tarda ~30 min. Ahora apunta a un colchón (`autopilot_buffer_leads=45`).
-- Cola: **33 personas reales** (antes 10). 17 buzones/marcas descartados sin contactar. 262 pruebas en verde.
-
+- Monitor móvil real `panel/monitor.html` (PWA, ícono de `El Socio.app`): pide `/api/estado` y `/api/preguntar` al mismo `panel_server.py:8787` (cero dato inventado; sin cotizado/vendido porque esa plata no se registra todavía). Botón pausar lead = real (`cancel_followups_for_lead` + flag en `settings`).
+- Notificación push al celular en fallos reales (`scripts/notificar.py` + ntfy.sh, gratis): se activa solo si pones `NTFY_TOPIC` en `.env`; sin eso no hace nada. Dispara desde `database.log_agent_action` cuando la herramienta es de error o hay `bloqueado_por_guarda`.
+- 262 pruebas en verde (incluye `test_sales_agent`, `test_autonomous_brain`, `test_content_manager`; se corren con `python3 scripts/test_X.py`, no hay pytest instalado).
 ## En prueba / Pendiente
-- Cola de correo: 33 personas (2 días a 15/día). Rendimiento real del buscador: ~28 personas por 104 consultas (~50 min, 0 USD). Los sitios colombianos publican `info@`, no gente: ese es el techo.
-- Sin respuestas de prospectos todavía: 26 correos enviados, 0 interesados. Falta la 1ª venta.
-- Riesgo abierto: vaciar la cola de golpe en una cuenta de 1 seguidor es el patrón que ya hizo que Meta restringiera la cuenta anterior.
-- Las 6 piezas del 25-nov SÍ se publicaron (`quota_usage: 5` en Meta); Raymond las archivó a mano, por eso `/media` sale vacío. Ojo: archivar deja el contenido invisible y sin métricas para `sincronizar_resultados_ig`.
-- Meta unificó el 25-nov `tuparcheenvivo` + `elsociotuiaa` + Facebook en una cuenta, y el usuario pasó de `elsociotuiaa` a `elsociotuia`. Falta revisar si los proyectos vecinos comparten correo/WhatsApp/cuentas con El Socio.
+- Cola de correo: 33 personas reales (2 días a 15/día). Buscador: ~28 personas por 104 consultas (~50 min, 0 USD) — el techo es que sitios colombianos solo publican `info@`.
+- Sin respuestas de prospectos todavía: 0 interesados reales en `processed_replies` (solo rebotes SMTP). Falta la 1ª venta.
+- Riesgo abierto: vaciar la cola de golpe en una cuenta de 1 seguidor es el patrón que restringió la cuenta IG anterior.
+- Meta unificó `tuparcheenvivo` + `elsociotuiaa` + Facebook; usuario pasó a `elsociotuia`. Falta revisar si proyectos vecinos comparten correo/WhatsApp.
 ## Descartado
 - Voces robóticas (`say`), bots/scrapers no oficiales de IG, `remotion render` directo en Monterey, Tailscale, Calendly externo, contestar ruido con saldo de IA.
-- Falsas alarmas verificadas: no hay ráfaga de correos, ni envíos de madrugada, ni acentos rotos (eso era mi vista previa).
+- WhatsApp Business API para el monitor móvil: el motor real es por correo (SMTP/IMAP), no hay canal de chat en vivo todavía.
