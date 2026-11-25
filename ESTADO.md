@@ -14,6 +14,8 @@
 - El buscador premiaba los buzones genéricos con +30 y una persona real competía con 0: 18 de 26 correos fueron a `info@`/`contacto@` y solo 2 a alguien con nombre. Invertido: persona +60/+35, buzón de empresa +10 (se aceptan de últimas, muchas PyMEs solo tienen ese). El saludo por nombre ahora usa el mismo criterio en buscador y redactor.
 - Plan diario de contenido se cortaba en `stop=max_tokens` (4400 justos): 0.1111 USD pagados por una respuesta inservible + reintento. Tope a 8000 (un tope alto no cuesta más, solo se paga lo escrito).
 - Presupuesto repartido con datos reales (ventas ~0.032/correo, contenido ~0.045/llamada): reserva ventas `0.41`, contenido `0.09`, y colchón `CONTENT_COLCHON_PIEZAS=6` — si ya hay 6 piezas listas sin publicar no se gasta en pensar más. Publicación bajada a 3/día: la cola dura el doble.
+- Leads: se descartaron 116 buzones de empresa sin contactar. Quedan **10** con persona real. El buscador NO usa IA (es scraping puro): descubrir y analizar prospectos cuesta 0 USD.
+- Filtro de persona reforzado: palabras de negocio (`lmvjewelry@`, `batutadiseno@`), sufijos societarios (`renovaplus.sas@`), genéricos en inglés (`hello@`, `contact@`) y lista de nombres de pila colombianos (`yesidcan@` → saluda "Yesid").
 ## En prueba / Pendiente
 - Cola: 6 piezas generadas listas (sin el carrusel que sale hoy). Mañana el motor reparte 6 a lo largo del día.
 - Sin respuestas de prospectos todavía: 26 correos enviados, 0 interesados. Falta la 1ª venta.

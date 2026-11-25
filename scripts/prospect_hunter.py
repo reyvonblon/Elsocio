@@ -439,6 +439,44 @@ PREFIJOS_BUZON_EMPRESA = {
     "commercial", "marketing", "nombre", "tunombre", "tuempresa",
 }
 
+# Palabras que delatan que el correo es la MARCA, no una persona: lmvjewelry@,
+# batutadiseno@, renovaplus.sas@. Escribirle a estos es como escribirle a info@.
+_PALABRAS_DE_NEGOCIO = {
+    "jewelry", "joyeria", "joyas", "tienda", "store", "shop", "boutique", "moda",
+    "diseno", "design", "studio", "estudio", "brands", "brand", "marca", "visual",
+    "datos", "audio", "video", "foto", "fotografia", "cafe", "bio", "natural",
+    "sas", "ltda", "eu", "sa", "srl", "inc", "corp", "group", "grupo", "company",
+    "textil", "tessile", "confecciones", "muebles", "obras", "construcciones",
+    "arquitectos", "arquitectura", "ingenieria", "consultores", "asesores",
+    "servicios", "logistica", "creativo", "creativa", "publicidad", "agencia",
+    "inmobiliaria", "constructora", "distribuciones", "importaciones", "soluciones",
+    "glosas", "renova", "plus", "pro", "max", "center", "centro", "clinica",
+}
+
+# Nombres de pila frecuentes en Colombia: la señal más confiable de que hay
+# una persona detrás, incluso en un Gmail (yesidcan@, cindypao_2714@).
+_NOMBRES_PILA = {
+    "alison", "ana", "andrea", "andres", "angela", "antonio", "beatriz", "camila",
+    "carlos", "carolina", "catalina", "cesar", "cindy", "claudia", "cristian",
+    "cristina", "daniel", "daniela", "david", "diana", "diego", "edgar", "eduardo",
+    "elena", "esteban", "fabian", "felipe", "fernando", "francisco", "gabriel",
+    "german", "gloria", "gustavo", "hector", "helena", "hernan", "isabel", "ivan",
+    "jaime", "javier", "jorge", "jose", "juan", "juliana", "julian", "julio",
+    "karen", "laura", "leonardo", "liliana", "lina", "lorena", "lucia", "luis",
+    "luisa", "manuel", "marcela", "margarita", "maria", "mariana", "mario", "marta",
+    "martha", "mary", "mauricio", "miguel", "monica", "natalia", "nicolas", "olga",
+    "oscar", "pablo", "paola", "patricia", "paula", "pedro", "rafael", "ramiro",
+    "raul", "ricardo", "roberto", "rodrigo", "rosa", "ruben", "samuel", "sandra",
+    "santiago", "sara", "sebastian", "sergio", "silvia", "sofia", "tatiana",
+    "valentina", "vanessa", "veronica", "vicente", "victor", "viviana", "william",
+    "yesid", "yolanda", "zulma", "alejandro", "alberto", "alvaro", "arturo",
+    "benjamin", "brayan", "dayana", "duvan", "edwin", "eben", "elkin", "emilio",
+    "esneider", "estefania", "fabio", "geovanny", "gerardo", "giovanni", "henry",
+    "jhon", "jhonatan", "johana", "johanna", "jonathan", "kevin", "leidy", "luz",
+    "maicol", "milena", "nelson", "nubia", "omar", "orlando", "rodolfo", "stefania",
+    "wilmer", "yeison", "yuliana",
+}
+
 _PARTICULAS_NOMBRE = {"de", "del", "la", "las", "los", "van", "da", "di"}
 
 
@@ -465,6 +503,16 @@ def _parece_correo_de_persona(local: str, dominio: str = "") -> bool:
         return False
     # "maria.de.los.rios" es una persona: las partículas no cuentan como nombre.
     partes = [p for p in partes if p not in _PARTICULAS_NOMBRE] or partes
+    # Si aparece una palabra de negocio, es el correo de la marca, no de alguien.
+    if any(p in _PALABRAS_DE_NEGOCIO for p in partes):
+        return False
+    # Un nombre de pila reconocible basta, aunque sea un Gmail suelto (yesidcan@, cindypao_2714@).
+    if partes[0] in _NOMBRES_PILA or any(p in _NOMBRES_PILA for p in partes):
+        return True
+    # Palabra pegada sin separador: lmvjewelry@, batutadiseno@, feraljoyeria@.
+    pegado = "".join(partes)
+    if any(neg in pegado for neg in _PALABRAS_DE_NEGOCIO if len(neg) >= 5):
+        return False
     # nombre.apellido / nombre_apellido: la señal más fuerte de persona real.
     if len(partes) >= 2 and all(3 <= len(p) <= 18 for p in partes):
         return True
@@ -484,7 +532,16 @@ def nombre_de_pila_desde_email(email_addr: str) -> str:
     if crudo and len(crudo[0]) == 1:
         return ""
     partes = [p for p in _partes_alfabeticas(local) if p not in _PARTICULAS_NOMBRE]
-    return partes[0].capitalize() if partes else ""
+    if not partes:
+        return ""
+    for parte in partes:
+        if parte in _NOMBRES_PILA:
+            return parte.capitalize()
+    # "yesidcan" / "cindypao": el nombre va al principio, el resto es relleno.
+    for nombre in sorted(_NOMBRES_PILA, key=len, reverse=True):
+        if partes[0].startswith(nombre) and len(nombre) >= 4:
+            return nombre.capitalize()
+    return partes[0].capitalize()
 
 
 def _clean_email_candidates(raw_html: str, site_domain: str) -> list[str]:
