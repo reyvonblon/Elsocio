@@ -424,16 +424,60 @@ def _es_gmail_basura(local: str, dom: str) -> bool:
     return digitos >= 6 and letras <= 4
 
 
+# Buzones de empresa: los lee una recepcionista o nadie, y quien decide no se entera.
+# Se siguen aceptando (muchas PyMEs colombianas solo publican este) pero de últimas.
+PREFIJOS_BUZON_EMPRESA = {
+    "contacto", "contactenos", "contactanos", "info", "informacion", "comercial",
+    "ventas", "hola", "gerencia", "pedidos", "mercadeo", "diseno", "estudio",
+    "proyectos", "direccion", "atencion", "tienda", "administracion", "admin",
+    "servicioalcliente", "clientes", "salud", "espacio", "preguntas", "soluciones",
+}
+
+_PARTICULAS_NOMBRE = {"de", "del", "la", "las", "los", "van", "da", "di"}
+
+
+def _partes_alfabeticas(local: str) -> list[str]:
+    """Trocea la parte local de un correo en palabras, ignorando números de relleno."""
+    crudo = re.sub(r"\d+", " ", local or "")
+    return [p for p in re.split(r"[._\-]+", crudo) if p.isalpha() and len(p) >= 2]
+
+
+def _parece_correo_de_persona(local: str) -> bool:
+    """`santiago.salazar@` sí; `info@` no. Escribirle a una persona cambia el resultado."""
+    bajo = (local or "").lower()
+    if not bajo or bajo in PREFIJOS_BUZON_EMPRESA:
+        return False
+    partes = _partes_alfabeticas(bajo)
+    if not partes or any(p in PREFIJOS_BUZON_EMPRESA for p in partes):
+        return False
+    # "maria.de.los.rios" es una persona: las partículas no cuentan como nombre.
+    partes = [p for p in partes if p not in _PARTICULAS_NOMBRE] or partes
+    # nombre.apellido / nombre_apellido: la señal más fuerte de persona real.
+    if len(partes) >= 2 and all(3 <= len(p) <= 18 for p in partes):
+        return True
+    # Un solo nombre suelto que no es palabra de buzón (mariana@, santiago@).
+    return len(partes) == 1 and 3 <= len(partes[0]) <= 14
+
+
+def nombre_de_pila_desde_email(email_addr: str) -> str:
+    """Saca el nombre con el que saludar. Vacío si el correo es un buzón de empresa."""
+    local = (email_addr or "").split("@")[0].lower()
+    if not _parece_correo_de_persona(local):
+        return ""
+    # `j.perez@` es inicial + apellido: no da para tutear ("Hola Perez" suena raro).
+    # Mejor devolver vacío y que el correo salude a la empresa.
+    crudo = [p for p in re.split(r"[._\-]+", re.sub(r"\d+", " ", local)) if p.isalpha()]
+    if crudo and len(crudo[0]) == 1:
+        return ""
+    partes = [p for p in _partes_alfabeticas(local) if p not in _PARTICULAS_NOMBRE]
+    return partes[0].capitalize() if partes else ""
+
+
 def _clean_email_candidates(raw_html: str, site_domain: str) -> list[str]:
     text = urllib.parse.unquote(html.unescape(raw_html or "")).replace("%40", "@")
     found = EMAIL_RE.findall(text)
     scored: list[tuple[int, str]] = []
     seen: set[str] = set()
-    preferred_prefixes = {
-        "contacto", "contactenos", "info", "comercial", "ventas", "hola",
-        "gerencia", "pedidos", "mercadeo", "diseno", "estudio", "proyectos",
-        "direccion", "atencion", "tienda", "administracion",
-    }
     for em in found:
         em_low = em.strip().lower().strip(".")
         if em_low in seen:
@@ -456,8 +500,13 @@ def _clean_email_candidates(raw_html: str, site_domain: str) -> list[str]:
             score += 50
         elif dom in {"gmail.com", "hotmail.com", "outlook.com"}:
             score += 25
-        if local in preferred_prefixes:
-            score += 30
+        # Antes esto premiaba los buzones genéricos con +30 y una persona real competía
+        # con 0: de 26 correos enviados, 18 fueron a info@/contacto@ y solo 2 a alguien
+        # con nombre. Queda al revés, que es como se consigue una respuesta.
+        if _parece_correo_de_persona(local):
+            score += 60 if len(_partes_alfabeticas(local)) >= 2 else 35
+        elif local in PREFIJOS_BUZON_EMPRESA:
+            score += 10
         scored.append((score, em_low))
     scored.sort(key=lambda x: (-x[0], x[1]))
     return [em for _, em in scored]

@@ -11,6 +11,7 @@
 - Rebotes diferidos: llegan del `mailer-daemon`, no eran lead y se descartaban en silencio; `hola@hades.com` llevaba 2 días rechazando y seguía recibiendo. Ya se detectan y cortan.
 - Correo sin ancho máximo (se estiraba en pantalla ancha) → 600px. `From` ahora lleva nombre. Logo con `EMAIL_LOGO=1`, apagado en frío (imagen de marca = pestaña Promociones).
 - Basura filtrada: portales de empleo (`magnetoempleos.com`) y nombres de empresa que eran consultas de Google.
+- El buscador premiaba los buzones genéricos con +30 y una persona real competía con 0: 18 de 26 correos fueron a `info@`/`contacto@` y solo 2 a alguien con nombre. Invertido: persona +60/+35, buzón de empresa +10 (se aceptan de últimas, muchas PyMEs solo tienen ese). El saludo por nombre ahora usa el mismo criterio en buscador y redactor.
 - Plan diario de contenido se cortaba en `stop=max_tokens` (4400 justos): 0.1111 USD pagados por una respuesta inservible + reintento. Tope a 8000 (un tope alto no cuesta más, solo se paga lo escrito).
 - Presupuesto repartido con datos reales (ventas ~0.032/correo, contenido ~0.045/llamada): reserva ventas `0.41`, contenido `0.09`, y colchón `CONTENT_COLCHON_PIEZAS=6` — si ya hay 6 piezas listas sin publicar no se gasta en pensar más. Publicación bajada a 3/día: la cola dura el doble.
 ## En prueba / Pendiente

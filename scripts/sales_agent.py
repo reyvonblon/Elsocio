@@ -1096,10 +1096,24 @@ class AgenteVentas:
 
     @classmethod
     def _extraer_nombre_persona_email(cls, email_addr: str) -> str:
-        """Detecta nombre real solo si el correo es claramente de persona (ej. santiago.salazar@...)."""
+        """Detecta nombre real solo si el correo es claramente de persona (ej. santiago.salazar@...).
+
+        Delega en `prospect_hunter` para que el buscador y el redactor usen el mismo criterio:
+        esta versión no reconocía `mariana@` (un solo nombre, sin punto) y saludaba a la empresa.
+        """
         local = (email_addr or "").split("@", 1)[0].strip().lower()
         if not local or local in cls._PREFIJOS_CORREO_GENERICO:
             return ""
+        try:
+            import prospect_hunter  # noqa: PLC0415
+
+            nombre = prospect_hunter.nombre_de_pila_desde_email(email_addr)
+            if nombre and nombre.lower() not in cls._PREFIJOS_CORREO_GENERICO:
+                return nombre
+            if nombre:
+                return ""
+        except Exception:
+            pass
         if "." in local or "_" in local:
             primero = re.split(r"[._-]+", local)[0]
             if primero.isalpha() and 3 <= len(primero) <= 14 and primero not in cls._PREFIJOS_CORREO_GENERICO:
