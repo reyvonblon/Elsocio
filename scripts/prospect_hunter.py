@@ -431,6 +431,11 @@ PREFIJOS_BUZON_EMPRESA = {
     "ventas", "hola", "gerencia", "pedidos", "mercadeo", "diseno", "estudio",
     "proyectos", "direccion", "atencion", "tienda", "administracion", "admin",
     "servicioalcliente", "clientes", "salud", "espacio", "preguntas", "soluciones",
+    "citas", "agenda", "cotizaciones", "cotizacion", "asesoria", "asesor", "consultas",
+    "redaccion", "prensa", "comunicaciones", "grupo", "equipo",
+    # Variantes en inglés, comunes en estudios y agencias colombianas.
+    "contact", "hello", "hi", "support", "sales", "team", "office", "mail", "email",
+    "enquiries", "inquiries", "studio", "work", "general", "bookings", "press",
 }
 
 _PARTICULAS_NOMBRE = {"de", "del", "la", "las", "los", "van", "da", "di"}
@@ -442,10 +447,17 @@ def _partes_alfabeticas(local: str) -> list[str]:
     return [p for p in re.split(r"[._\-]+", crudo) if p.isalpha() and len(p) >= 2]
 
 
-def _parece_correo_de_persona(local: str) -> bool:
+def _parece_correo_de_persona(local: str, dominio: str = "") -> bool:
     """`santiago.salazar@` sí; `info@` no. Escribirle a una persona cambia el resultado."""
     bajo = (local or "").lower()
     if not bajo or bajo in PREFIJOS_BUZON_EMPRESA:
+        return False
+    # Buzón con sufijo pegado: infocolombia@, ventas1@, contactobogota@.
+    if any(bajo.startswith(pref) for pref in PREFIJOS_BUZON_EMPRESA if len(pref) >= 4):
+        return False
+    # El nombre de la marca no es una persona: makeno@makeno.com.co.
+    raiz_dom = re.split(r"[.\-]", (dominio or "").lower())[0]
+    if raiz_dom and bajo.replace(".", "").replace("-", "").replace("_", "") == raiz_dom:
         return False
     partes = _partes_alfabeticas(bajo)
     if not partes or any(p in PREFIJOS_BUZON_EMPRESA for p in partes):
@@ -462,7 +474,8 @@ def _parece_correo_de_persona(local: str) -> bool:
 def nombre_de_pila_desde_email(email_addr: str) -> str:
     """Saca el nombre con el que saludar. Vacío si el correo es un buzón de empresa."""
     local = (email_addr or "").split("@")[0].lower()
-    if not _parece_correo_de_persona(local):
+    dominio = (email_addr or "").split("@")[-1].lower() if "@" in (email_addr or "") else ""
+    if not _parece_correo_de_persona(local, dominio):
         return ""
     # `j.perez@` es inicial + apellido: no da para tutear ("Hola Perez" suena raro).
     # Mejor devolver vacío y que el correo salude a la empresa.
@@ -503,7 +516,7 @@ def _clean_email_candidates(raw_html: str, site_domain: str) -> list[str]:
         # Antes esto premiaba los buzones genéricos con +30 y una persona real competía
         # con 0: de 26 correos enviados, 18 fueron a info@/contacto@ y solo 2 a alguien
         # con nombre. Queda al revés, que es como se consigue una respuesta.
-        if _parece_correo_de_persona(local):
+        if _parece_correo_de_persona(local, dom):
             score += 60 if len(_partes_alfabeticas(local)) >= 2 else 35
         elif local in PREFIJOS_BUZON_EMPRESA:
             score += 10
