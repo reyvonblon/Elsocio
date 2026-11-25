@@ -289,8 +289,13 @@ _SENALES_BAJA = (
     "respondeme con la palabra baja", "desuscribir", "no te escribo mas",
     "no te escribo de nuevo", "no te vuelvo a escribir", "no les vuelvo a escribir",
     "no volver a escribir", "escribe baja", "saco de la lista",
+    "me dices baja", "dime baja", "me avisas baja", "no insisto mas",
 )
-LINEA_BAJA = "\n\nSi no te interesa, respóndeme BAJA y no te vuelvo a escribir."
+# El pie "Si no te interesa, respóndeme BAJA y no te vuelvo a escribir" en línea
+# aparte es exactamente como se ve un boletín masivo: el lector lo reconoce antes
+# de leer el correo. Se conserva la palabra BAJA (es el mecanismo de baja que no
+# gasta saldo de IA) pero redactada como la diría alguien escribiendo a mano.
+LINEA_BAJA = "\n\nSi no les aplica me dices BAJA y no insisto más."
 
 
 def tiene_linea_de_baja(cuerpo: str) -> bool:
@@ -386,13 +391,13 @@ def revisar_calidad_humana(
 # ------------------------------------------------------------------ modelos de correo y aprendizaje
 
 # 4 modelos sobrios, 100% dentro de la voz real de Raymond en El Socio (asuntos cortos 1-4 palabras,
-# 0 exclamaciones, saludo natural "Buen día, señores [Marca]" o "Hola [Nombre]" y cierre "Quedo atento, muchas gracias.").
+# 0 exclamaciones, saludo natural "Hola [Nombre]" o "Buen día," y cierre "Quedo atento, muchas gracias.").
 MODELOS_CORREO: tuple[dict[str, str], ...] = (
     {
         "id": "muestra_directa",
         "nombre": "Muestra o ejemplo primero",
         "guia": (
-            "Asunto de 1-4 palabras. Saludo natural ('Buen día, señores [Marca],' o 'Hola [Nombre],'). "
+            "Asunto de 1-4 palabras. Saludo natural ('Hola [Nombre],'; sin nombre, 'Buen día,' seco, nunca 'señores'). "
             "Abre mencionando 1 detalle real del dossier ('Pasé por su perfil y vi...'). En una frase corta explica qué "
             "haces en El Socio para un negocio como el suyo. Cierra ofreciendo mostrar un ejemplo sin compromiso "
             "y remata con 'Quedo atento, muchas gracias.' (0 exclamaciones). 50-80 palabras."
@@ -402,7 +407,7 @@ MODELOS_CORREO: tuple[dict[str, str], ...] = (
         "id": "observacion_puntual",
         "nombre": "Observación puntual + pregunta de colega",
         "guia": (
-            "Asunto de 1-4 palabras. Saludo sobrio de Raymond ('Buen día, señores [Marca],' o 'Hola [Nombre],'). "
+            "Asunto de 1-4 palabras. Saludo sobrio ('Hola [Nombre],'; sin nombre, 'Buen día,' seco, nunca 'señores'). "
             "Abre con una observación concreta sobre lo que viste en su perfil/web ('me surgió la duda de...'), "
             "sin halagos vacíos. Conecta en 1 frase práctica y cierra con pregunta directa ('¿les funciona para su formato "
             "o ya lo tienen resuelto?'). Remata con 'Quedo atento, muchas gracias.' (0 exclamaciones). 45-75 palabras."

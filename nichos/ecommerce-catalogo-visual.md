@@ -43,4 +43,8 @@ tienda productos naturales suplementos Cali contacto | Marcas de Consumo y Alime
 tienda online mascotas accesorios Medellin contacto | E-commerce de Mascotas
 tienda articulos deportivos online Bogota contacto | E-commerce Deportivo
 tienda online papeleria regalos diseño Medellin contacto | E-commerce de Papelería y Regalos
+tienda online Medellin "quienes somos" fundadora | E-commerce de Consumo
+marca de cosmetica Bogota "nuestro equipo" | E-commerce de Cosmética y Cuidado Personal
+joyeria diseño Medellin "quienes somos" | E-commerce de Joyería y Accesorios
+marca de calzado Bucaramanga "nuestro equipo" | E-commerce de Calzado y Marroquinería
 ```

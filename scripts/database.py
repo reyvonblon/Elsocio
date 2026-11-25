@@ -123,6 +123,8 @@ _MIGRACIONES = {
         ("ig_media_id", "TEXT DEFAULT ''"),
         ("error_ig", "TEXT DEFAULT ''"),
         ("hashtags_ig", "TEXT DEFAULT ''"),
+        ("comentarios_ig", "INTEGER DEFAULT 0"),
+        ("likes_ig", "INTEGER DEFAULT 0"),
     ],
 }
 
@@ -173,6 +175,23 @@ def list_all_known_emails() -> set[str]:
     with _conn() as conn:
         rows = conn.execute("SELECT email FROM leads").fetchall()
         return {r["email"].lower() for r in rows if r["email"]}
+
+
+def leads_descartados_por_buzon(limit: int = 40) -> list[dict]:
+    """Empresas reales que descartamos porque solo publicaban buzón (`info@`, `ventas@`).
+
+    El dominio y el nicho ya están verificados: volver a ellas a buscar a la persona
+    rinde mucho más que descubrir una empresa nueva desde cero.
+    """
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM leads WHERE stage='no_interesado' "
+            "AND email LIKE '%@%' "
+            "AND COALESCE(bounced, 0)=0 "
+            "ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?",
+            (max(1, limit),),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def count_leads_en_cola() -> int:
@@ -468,6 +487,18 @@ def update_outbox_job(job_id: int, status: str, error: str = "") -> None:
         conn.execute("UPDATE outbox SET status=?, error=? WHERE id=?", (status, error, job_id))
 
 
+def list_correos_enviados_dia(fecha: str, limit: int = 50) -> list[dict]:
+    """Correos de prospección que de verdad salieron por SMTP ese día, con su cuerpo real —
+    para la vista previa del panel móvil. `fecha` en formato 'YYYY-MM-DD'."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT id, recipient, subject, body, nicho, scheduled_for FROM outbox "
+            "WHERE status='sent' AND scheduled_for LIKE ? ORDER BY scheduled_for DESC LIMIT ?",
+            (f"{fecha}%", limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def count_sent_emails_today() -> int:
     today = datetime.now().strftime("%Y-%m-%d")
     with _conn() as conn:
@@ -623,7 +654,7 @@ def recent_agent_log(limit: int = 20) -> list[dict]:
     """Últimas acciones reales del sistema (para pintar 'qué está haciendo' en el panel)."""
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT fecha, herramienta, resultado, costo_usd, bloqueado_por_guarda "
+            "SELECT fecha, herramienta, argumentos, resultado, costo_usd, bloqueado_por_guarda "
             "FROM agent_log ORDER BY id DESC LIMIT ?",
             (int(limit),),
         ).fetchall()
@@ -1007,6 +1038,30 @@ def count_seguimientos_pendientes() -> int:
             "SELECT COUNT(*) AS n FROM agent_followups WHERE estado='pendiente'"
         ).fetchone()
         return int(row["n"])
+
+
+def actualizar_engagement_ig(content_id: int, *, likes: int, comentarios: int) -> None:
+    """Guarda el like_count/comments_count real que trae `ig_publisher.sincronizar_resultados_ig`
+    desde la Graph API de Meta, para poder sumarlo después sin volver a llamar a Meta."""
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE content_queue SET likes_ig=?, comentarios_ig=? WHERE id=?",
+            (int(likes), int(comentarios), int(content_id)),
+        )
+        conn.commit()
+
+
+def list_piezas_ig_publicadas_dia(fecha: str, limit: int = 50) -> list[dict]:
+    """Piezas publicadas ese día con su engagement real (Graph API) — para la pestaña
+    'Comentarios IG' del panel. `fecha` en formato 'YYYY-MM-DD'."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT id, tipo, gancho, caption, comentarios_ig, likes_ig, published_at "
+            "FROM content_queue WHERE estado='publicado' AND published_at LIKE ? "
+            "ORDER BY published_at DESC LIMIT ?",
+            (f"{fecha}%", limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def _leads_pausados() -> set[int]:

@@ -243,7 +243,12 @@ def _fetch_url(
             with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
                 status = getattr(resp, "status", 200) or 200
                 ctype = (resp.headers.get("Content-Type") or "").lower()
-                if ctype and "text" not in ctype and "html" not in ctype and "xml" not in ctype:
+                # "json" va en la lista desde que hay fuentes que responden JSON
+                # (OpenStreetMap): antes el cuerpo se descartaba y la fuente
+                # devolvía 200 con 0 resultados, como si no hubiera negocios.
+                if ctype and not any(
+                    tipo in ctype for tipo in ("text", "html", "xml", "json")
+                ):
                     return status, ""
                 raw = resp.read(max_bytes)
                 if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
@@ -506,6 +511,15 @@ _PARTICULAS_NOMBRE = {"de", "del", "la", "las", "los", "van", "da", "di"}
 # Trozos que no son nombre aunque viajen en el correo: "etc.erikatarazona@".
 _RUIDO_EN_SALUDO = {"etc", "sas", "ltda", "co", "col", "acc", "arq", "ing", "dr", "dra"}
 
+# Apodos con los que la gente firma en Colombia. Solo valen para el SALUDO de un
+# correo que ya pasó el filtro de persona: como señal de persona abrirían la puerta.
+_APODOS_SALUDO = {
+    "mafe": "Mafe", "pipe": "Pipe", "juanda": "Juanda", "sebas": "Sebas",
+    "santi": "Santi", "dani": "Dani", "cata": "Cata", "nata": "Nata",
+    "vale": "Vale", "lucho": "Lucho", "caro": "Caro", "pau": "Pau",
+    "tefa": "Tefa", "moni": "Moni", "kathe": "Kathe", "jhona": "Jhona",
+}
+
 
 def _partes_alfabeticas(local: str) -> list[str]:
     """Trocea la parte local de un correo en palabras, ignorando números de relleno."""
@@ -583,6 +597,9 @@ def nombre_de_pila_desde_email(email_addr: str) -> str:
     for parte in partes:
         if parte in _NOMBRES_PILA:
             return parte.capitalize()
+    for parte in partes:
+        if parte in _APODOS_SALUDO:
+            return _APODOS_SALUDO[parte]
     # "yesidcan" / "cindypao": el nombre va al principio, el resto es relleno.
     candidatos = [
         n for n in _NOMBRES_PILA if len(n) >= 4 and partes[0].startswith(n)
@@ -727,6 +744,86 @@ def _extraer_instagram(raw_html: str) -> str:
         if c.lower() not in ignorar and len(c) >= 2:
             return f"@{c}"
     return ""
+
+
+# Señales de a qué se dedica de verdad un negocio. Hasta ahora el nicho se heredaba
+# de la consulta que lo encontró, no del negocio: un estudio de arquitectura hallado
+# con una consulta de ropa quedaba en "fichas de ropa" y recibía el correo
+# equivocado. Nadie responde a eso, y el motor concluye que el nicho no convierte.
+_SENALES_DE_NICHO: dict[str, tuple[str, ...]] = {
+    "fichas-tecnicas-ropa": (
+        "confeccion", "confección", "patronaje", "maquila", "prendas", "costura",
+        "textil", "moda", "ropa", "tallas", "camisetas", "vestidos", "swimwear",
+        "vestidos de baño", "streetwear", "lenceria", "lencería", "dotaciones",
+        "uniformes", "paquete completo", "escalado", "molderia", "moldería",
+    ),
+    "modelado-3d-espacios": (
+        "arquitect", "interiores", "remodelacion", "remodelación", "mobiliario",
+        "carpinteria", "carpintería", "cocinas integrales", "closets", "obra",
+        "render", "planos", "stands", "espacios comerciales", "acustico",
+        "acústico", "adecuacion", "adecuación", "muebles a medida", "diseño de locales",
+    ),
+    "ecommerce-catalogo-visual": (
+        "carrito", "añadir al carrito", "agregar al carrito", "comprar ahora",
+        "envios a todo", "envíos a todo", "catalogo", "catálogo", "shopify",
+        "woocommerce", "tiendanube", "cosmetica", "cosmética", "joyeria", "joyería",
+        "calzado", "marroquineria", "marroquinería", "accesorios", "tienda online",
+    ),
+    "automatizacion-agencias-estudios": (
+        "agencia", "marketing", "branding", "publicidad", "diseño grafico",
+        "diseño gráfico", "campañas", "redes sociales", "productora", "audiovisual",
+        "desarrollo web", "pauta", "community manager", "estrategia digital",
+        "fotografia de producto", "fotografía de producto", "nuestros clientes",
+    ),
+}
+
+
+# Palabras que por sí solas dicen a qué se dedica el negocio (valen doble). Van en
+# español y en inglés: varios sitios colombianos de arquitectura y diseño están en
+# inglés, y sin esto "taller architects" quedaba clasificado como taller de ropa.
+_SENALES_FUERTES: dict[str, tuple[str, ...]] = {
+    "fichas-tecnicas-ropa": (
+        "confeccion", "confección", "patronaje", "maquila", "apparel", "clothing",
+        "fashion design", "swimwear", "moldería", "molderia",
+    ),
+    "modelado-3d-espacios": (
+        "arquitect", "architect", "interior design", "interiores", "remodelacion",
+        "remodelación", "carpinteria", "carpintería", "cocinas integrales",
+        "furniture", "joinery", "mobiliario",
+    ),
+    "ecommerce-catalogo-visual": (
+        "añadir al carrito", "agregar al carrito", "add to cart", "catálogo de productos",
+        "cosmetica", "cosmética", "joyeria", "joyería", "marroquineria", "marroquinería",
+    ),
+    "automatizacion-agencias-estudios": (
+        "agencia de marketing", "agencia de publicidad", "branding", "marketing agency",
+        "productora audiovisual", "desarrollo web", "diseño gráfico", "graphic design",
+    ),
+}
+
+
+def clasificar_nicho_por_texto(texto: str, *, nicho_actual: str = "") -> str:
+    """Devuelve el nicho al que de verdad pertenece el negocio, según su propio texto.
+
+    Si no hay señal clara, deja el nicho que ya traía: cambiarlo a ciegas sería
+    igual de malo que heredarlo de la consulta.
+    """
+    bajo = (texto or "").lower()
+    if not bajo:
+        return nicho_actual
+    puntajes = {
+        nicho: sum(1 for s in senales if s in bajo)
+        + 2 * sum(1 for s in _SENALES_FUERTES.get(nicho, ()) if s in bajo)
+        for nicho, senales in _SENALES_DE_NICHO.items()
+    }
+    mejor = max(puntajes, key=lambda n: puntajes[n])
+    if puntajes[mejor] < 2:
+        return nicho_actual
+    # Solo se cambia si el otro nicho gana con claridad: un empate no es motivo
+    # para moverle el nicho a un lead que ya estaba clasificado.
+    if nicho_actual and puntajes.get(nicho_actual, 0) + 2 > puntajes[mejor]:
+        return nicho_actual
+    return mejor
 
 
 def _encaja_con_nicho(raw_html: str, texto_total: str, nicho: str) -> tuple[bool, str]:
@@ -931,16 +1028,19 @@ def scrape_site_contact(url: str, industry: str, nicho: str) -> dict[str, str] |
     company = _marca_confiable(
         str(perfil.get("marca") or ""), dom, _clean_business_name(title, dom),
     )
+    dossier = str(perfil.get("dossier") or "")
+    # El nicho lo decide el negocio, no la consulta que lo encontró.
+    nicho_real = clasificar_nicho_por_texto(f"{dossier} {title}", nicho_actual=nicho)
     return {
         "nombre": company,
         "empresa": company,
         "correo": best_email,
         "whatsapp": str(perfil.get("whatsapp") or ""),
         "website": str(perfil.get("website") or url),
-        "dossier": str(perfil.get("dossier") or ""),
-        "nicho": nicho,
-        "industria": industry,
-        "servicio": industry,
+        "dossier": dossier,
+        "nicho": nicho_real,
+        "industria": industry if nicho_real == nicho else "",
+        "servicio": industry if nicho_real == nicho else "",
     }
 
 
@@ -1251,6 +1351,308 @@ def enriquecer_leads_pendientes(*, limit: int = 30, dry_run: bool = False) -> di
     }
 
 
+# Rutas donde una empresa publica a su gente. La home publica el buzón; el nombre
+# del dueño vive en "equipo", "nosotros", y a veces en la política de privacidad
+# (ahí va el correo del responsable de datos, que casi siempre es una persona).
+_PISTAS_PAGINA_DE_PERSONA = (
+    "equipo", "team", "nosotros", "quienes", "acerca", "about", "staff",
+    "directorio", "gerencia", "direccion", "fundador", "founder", "socios",
+    "contacto", "contact", "prensa", "press", "privacidad", "privacy",
+    "tratamiento-de-datos", "proteccion-de-datos", "legal", "autor", "author",
+)
+
+_SLUGS_PAGINA_DE_PERSONA = (
+    "/nosotros", "/equipo", "/quienes-somos", "/about", "/about-us", "/team",
+    "/contacto", "/contactenos", "/politica-de-privacidad", "/privacidad",
+    "/tratamiento-de-datos", "/aviso-legal", "/pages/nosotros", "/pages/contacto",
+)
+
+
+def buscar_persona_en_dominio(
+    dominio: str, *, website: str = "", max_paginas: int = 6,
+) -> str:
+    """Busca un correo de PERSONA publicado en el sitio de una empresa que ya conocemos.
+
+    De los 133 descartados teníamos 91 dominios reales ya calificados por nicho: tirar
+    la empresa entera porque su home publica `info@` era botar trabajo ya hecho. El
+    nombre del dueño suele estar a un clic, en "equipo" o en la política de datos.
+    Devuelve "" si el sitio de verdad no publica a nadie. Nunca inventa direcciones.
+    """
+    dominio = (dominio or "").strip().lower().lstrip(".")
+    if not dominio or _is_blocked_domain(dominio) or dominio in FREE_MAIL_DOMAINS:
+        return ""
+
+    raices = []
+    if website.startswith("http"):
+        raices.append(website)
+    raices.extend([f"https://{dominio}/", f"https://www.{dominio}/"])
+
+    home_html = ""
+    base_url = ""
+    for raiz in raices:
+        try:
+            _, home_html = _fetch_url(raiz, timeout=7, allow_insecure_fallback=True)
+        except Exception:
+            continue
+        if home_html:
+            base_url = raiz
+            break
+    if not home_html:
+        return ""
+
+    candidatos: list[str] = list(_clean_email_candidates(home_html, dominio))
+
+    paginas: list[str] = []
+    for href in LINK_RE.findall(home_html):
+        low = href.lower()
+        if any(pista in low for pista in _PISTAS_PAGINA_DE_PERSONA):
+            full = urllib.parse.urljoin(base_url, href)
+            if _domain_of(full) == dominio and full not in paginas and full != base_url:
+                paginas.append(full)
+    for slug in _SLUGS_PAGINA_DE_PERSONA:
+        full = urllib.parse.urljoin(base_url, slug)
+        if full not in paginas:
+            paginas.append(full)
+
+    for pagina in paginas[:max_paginas]:
+        try:
+            _, sub_html = _fetch_url(pagina, timeout=5, allow_insecure_fallback=True)
+        except Exception:
+            continue
+        if not sub_html:
+            continue
+        for em in _clean_email_candidates(sub_html, dominio):
+            if em not in candidatos:
+                candidatos.append(em)
+        # En cuanto aparece una persona verificable, se corta: no hace falta
+        # recorrer el sitio entero y cada página son segundos de más.
+        for em in candidatos:
+            local, _, dom = em.partition("@")
+            if _parece_correo_de_persona(local, dom) and verify_domain_mx(em):
+                return em
+
+    for em in candidatos:
+        local, _, dom = em.partition("@")
+        if _parece_correo_de_persona(local, dom) and verify_domain_mx(em):
+            return em
+    return ""
+
+
+# OpenStreetMap: directorio público, gratis y sin clave. Da negocios por categoría
+# y ciudad exacta — un universo de dominios que los buscadores no devuelven porque
+# no están posicionados. Son los negocios pequeños, justo los que nos interesan.
+OSM_TAGS_POR_NICHO: dict[str, tuple[str, ...]] = {
+    "fichas-tecnicas-ropa": (
+        'nwr["shop"="clothes"]', 'nwr["shop"="boutique"]', 'nwr["craft"="tailor"]',
+        'nwr["shop"="fabric"]', 'nwr["shop"="sewing"]', 'nwr["shop"="bag"]',
+    ),
+    "modelado-3d-espacios": (
+        'nwr["office"="architect"]', 'nwr["craft"="carpenter"]', 'nwr["craft"="joiner"]',
+        'nwr["shop"="interior_decoration"]', 'nwr["shop"="kitchen"]', 'nwr["shop"="furniture"]',
+    ),
+    "ecommerce-catalogo-visual": (
+        'nwr["shop"="cosmetics"]', 'nwr["shop"="jewelry"]', 'nwr["shop"="shoes"]',
+        'nwr["shop"="pet"]', 'nwr["shop"="sports"]', 'nwr["shop"="chocolate"]',
+        'nwr["shop"="coffee"]',
+    ),
+    "automatizacion-agencias-estudios": (
+        'nwr["office"="advertising_agency"]', 'nwr["office"="graphic_design"]',
+        'nwr["office"="it"]', 'nwr["craft"="photographer"]', 'nwr["office"="estate_agent"]',
+        'nwr["office"="consulting"]',
+    ),
+}
+
+OSM_CIUDADES: tuple[str, ...] = (
+    "Medellín", "Bogotá", "Cali", "Barranquilla", "Bucaramanga", "Pereira",
+    "Cartagena", "Manizales", "Envigado", "Itagüí", "Sabaneta", "Bello",
+)
+
+_OSM_ENDPOINTS = (
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+)
+
+
+def _osm_consultar(ciudad: str, selectores: tuple[str, ...], *, limite: int = 200) -> list[dict]:
+    """Pide a Overpass los negocios de una categoría en una ciudad. Devuelve [] si falla."""
+    cuerpo_sel = "\n  ".join(f"{sel}(area.a);" for sel in selectores)
+    consulta = (
+        "[out:json][timeout:50];\n"
+        f'area["name"="{ciudad}"]["boundary"="administrative"]->.a;\n'
+        f"(\n  {cuerpo_sel}\n);\n"
+        f"out tags center {limite};"
+    )
+    datos = urllib.parse.urlencode({"data": consulta}).encode("utf-8")
+    for endpoint in _OSM_ENDPOINTS:
+        try:
+            status, body = _fetch_url(
+                endpoint, timeout=60, max_bytes=3_000_000, data=datos,
+                extra_headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    # Overpass responde 406 al User-Agent de navegador: exige uno
+                    # identificable y un Accept de JSON, no de HTML.
+                    "User-Agent": "ElSocio/1.0 (prospeccion de clientes; Colombia)",
+                    "Accept": "application/json",
+                },
+            )
+        except Exception:
+            continue
+        if status != 200 or not body:
+            continue
+        try:
+            return json.loads(body).get("elements", []) or []
+        except Exception:
+            continue
+    return []
+
+
+def descubrir_por_openstreetmap(
+    *, needed: int = 20, ciudades: tuple[str, ...] = (), nichos: tuple[str, ...] = (),
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """Fuente nueva: negocios de OSM con sitio propio, y dentro del sitio, la persona.
+
+    Los buscadores devuelven siempre a los mismos (los que pagan SEO). OSM devuelve
+    el taller de barrio con web sencilla, que es justo quien necesita esto y quien
+    sí publica el correo del dueño.
+    """
+    database.init_db()
+    conocidos = {e.lower() for e in database.list_all_known_emails()}
+    dominios_conocidos = {_domain_of(e) for e in conocidos if "@" in e} - FREE_MAIL_DOMAINS
+
+    objetivo_ciudades = ciudades or OSM_CIUDADES
+    objetivo_nichos = nichos or tuple(OSM_TAGS_POR_NICHO)
+
+    vistos: set[str] = set()
+    candidatos: list[tuple[str, str, str, str]] = []  # (dominio, nombre, ciudad, nicho)
+    for ciudad in objetivo_ciudades:
+        for nicho in objetivo_nichos:
+            selectores = OSM_TAGS_POR_NICHO.get(nicho, ())
+            if not selectores:
+                continue
+            for el in _osm_consultar(ciudad, selectores):
+                tags = el.get("tags") or {}
+                web = (
+                    tags.get("website") or tags.get("contact:website")
+                    or tags.get("url") or ""
+                )
+                correo_osm = (tags.get("email") or tags.get("contact:email") or "").strip().lower()
+                dom = _domain_of(web) or _domain_of(correo_osm)
+                if not dom or dom in vistos or dom in dominios_conocidos or _is_blocked_domain(dom):
+                    continue
+                if dom in FREE_MAIL_DOMAINS:
+                    continue
+                vistos.add(dom)
+                candidatos.append((dom, (tags.get("name") or "").strip(), ciudad, nicho))
+
+    encontrados: list[dict[str, str]] = []
+    revisados = 0
+    for dom, nombre, ciudad, nicho in candidatos:
+        if len(encontrados) >= needed:
+            break
+        revisados += 1
+        correo = buscar_persona_en_dominio(dom)
+        if not correo or correo in conocidos:
+            continue
+        conocidos.add(correo)
+        perfil = enriquecer_lead_por_dominio(correo, nicho=nicho, website=f"https://{dom}/")
+        marca = _marca_confiable(str((perfil or {}).get("marca") or ""), dom, nombre)
+        dossier = str((perfil or {}).get("dossier") or "")
+        # La categoría de OSM orienta, pero manda lo que dice su propio sitio.
+        nicho_real = clasificar_nicho_por_texto(f"{dossier} {nombre}", nicho_actual=nicho)
+        encontrados.append({
+            "nombre": marca or nombre or dom,
+            "empresa": marca or nombre or dom,
+            "correo": correo,
+            "whatsapp": str((perfil or {}).get("whatsapp") or ""),
+            "website": f"https://{dom}/",
+            "dossier": dossier,
+            "nicho": nicho_real,
+            "servicio": "",
+            "ciudad": ciudad,
+        })
+
+    guardados = 0 if dry_run else guardar_prospectos(encontrados)
+    return {
+        "dry_run": dry_run,
+        "fuente": "openstreetmap",
+        "negocios_con_dominio": len(candidatos),
+        "dominios_revisados": revisados,
+        "personas_encontradas": len(encontrados),
+        "guardados": guardados,
+        "prospects": encontrados,
+    }
+
+def rescatar_personas_de_descartados(
+    *, limit: int = 40, dry_run: bool = False,
+) -> dict[str, object]:
+    """Vuelve a los dominios que descartamos por publicar solo buzón y busca a la persona.
+
+    Es la fuente más barata que tenemos: la empresa ya está calificada por nicho y
+    verificada, solo faltaba a quién escribirle.
+    """
+    database.init_db()
+    conocidos = {e.lower() for e in database.list_all_known_emails()}
+
+    # Se piden de más y se filtra aquí: lo que descarta es el filtro de persona de
+    # hoy, no la nota que quedó escrita el día que se descartó.
+    filas = [
+        f for f in database.leads_descartados_por_buzon(limit=limit * 6)
+        if "@" in str(f.get("email") or "")
+        and not _parece_correo_de_persona(
+            str(f["email"]).split("@", 1)[0].lower(), str(f["email"]).split("@")[-1].lower(),
+        )
+    ][:limit]
+    revisados = 0
+    rescatados: list[dict[str, str]] = []
+    sin_persona: list[str] = []
+
+    for fila in filas:
+        correo_viejo = str(fila.get("email") or "").lower()
+        web = str(fila.get("website") or "")
+        # Muchas PyMEs publican un Gmail pero sí tienen sitio propio: el dominio
+        # que hay que recorrer es el del sitio, no el del correo.
+        dom = _domain_of(correo_viejo)
+        if not dom or dom in FREE_MAIL_DOMAINS:
+            dom = _domain_of(web)
+        if not dom or dom in FREE_MAIL_DOMAINS:
+            continue
+        revisados += 1
+        encontrado = buscar_persona_en_dominio(dom, website=web)
+        if not encontrado or encontrado in conocidos:
+            sin_persona.append(dom)
+            continue
+        conocidos.add(encontrado)
+        dossier = str(fila.get("dossier") or "")
+        empresa = str(fila.get("company") or "")
+        # `info@tallerarchitects.com` venía marcado como "fichas de ropa" solo porque
+        # lo encontró una consulta de ropa. Aquí se corrige con el texto de su sitio.
+        nicho_real = clasificar_nicho_por_texto(
+            f"{dossier} {empresa}", nicho_actual=str(fila.get("nicho") or ""),
+        )
+        rescatados.append({
+            "nombre": empresa or str(fila.get("name") or ""),
+            "empresa": empresa,
+            "correo": encontrado,
+            "whatsapp": str(fila.get("whatsapp") or ""),
+            "website": str(fila.get("website") or ""),
+            "dossier": dossier,
+            "nicho": nicho_real,
+            "servicio": str(fila.get("service_interest") or ""),
+            "reemplaza_a": correo_viejo,
+        })
+
+    guardados = 0 if dry_run else guardar_prospectos(rescatados)
+    return {
+        "dry_run": dry_run,
+        "dominios_revisados": revisados,
+        "personas_encontradas": len(rescatados),
+        "guardados": guardados,
+        "sin_persona": len(sin_persona),
+        "rescatados": rescatados,
+    }
+
+
 def guardar_prospectos(items: list[dict[str, str]]) -> int:
     """Mete en la cola lo descubierto. Corrido a mano, el buscador solo imprimía:
     encontraba prospectos reales y los tiraba a la basura al terminar."""
@@ -1282,9 +1684,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--enriquecer-pendientes", action="store_true",
                         help="Analiza y limpia los leads en frío pendientes en data/el_socio.db.")
     parser.add_argument("--dry-run", action="store_true", help="Prueba en seco sin tocar data/el_socio.db.")
+    parser.add_argument("--osm", action="store_true",
+                        help="Descubre por OpenStreetMap (negocios por categoría y ciudad) "
+                             "y busca a la persona dentro de su sitio.")
+    parser.add_argument("--rescatar-personas", action="store_true",
+                        help="Vuelve a las empresas descartadas por publicar solo buzón "
+                             "y busca a la persona en su sitio (equipo, nosotros, legal).")
     parser.add_argument("--guardar", action="store_true",
                         help="Guarda lo descubierto en data/el_socio.db como nuevo_lead (llena la cola).")
     args = parser.parse_args(argv)
+
+    if args.osm:
+        print(json.dumps(
+            descubrir_por_openstreetmap(needed=max(1, args.needed), dry_run=args.dry_run),
+            ensure_ascii=False, indent=2,
+        ))
+        return 0
+
+
+    if args.rescatar_personas:
+        print(json.dumps(
+            rescatar_personas_de_descartados(limit=max(1, args.needed), dry_run=args.dry_run),
+            ensure_ascii=False, indent=2,
+        ))
+        return 0
 
     if args.enriquecer_pendientes:
         print(json.dumps(

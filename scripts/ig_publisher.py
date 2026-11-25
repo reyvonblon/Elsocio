@@ -989,6 +989,8 @@ def sincronizar_resultados_ig(
 
         comentarios = int(datos.get("comments_count") or 0)
         likes = int(datos.get("like_count") or 0)
+        if not dry_run:
+            database.actualizar_engagement_ig(p["id"], likes=likes, comentarios=comentarios)
 
         hashtags_pieza = [h for h in (p.get("hashtags_ig") or "").split(",") if h]
         if hashtags_pieza:

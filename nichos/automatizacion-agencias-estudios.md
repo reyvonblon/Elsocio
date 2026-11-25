@@ -43,4 +43,8 @@ desarrollo web software a medida Bogota contacto | Agencia Digital y Desarrollo
 agencia de eventos corporativos Medellin contacto | Agencia de Eventos y BTL
 agencia eventos activaciones BTL Bogota contacto | Agencia de Eventos y BTL
 consultoria contable juridica pymes Medellin contacto | Servicios Profesionales a PyMEs
+agencia de marketing Medellin "nuestro equipo" | Agencia de Marketing y Branding
+estudio de diseño Bogota "quienes somos" socios | Estudio de Diseño y Branding
+productora audiovisual Medellin "nuestro equipo" | Productora Audiovisual
+agencia digital Cali "equipo" director | Agencia Digital y Desarrollo
 ```

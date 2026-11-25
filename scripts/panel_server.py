@@ -14,6 +14,7 @@ Seguridad en código:
 from __future__ import annotations
 
 import argparse
+import json
 import mimetypes
 import sys
 import urllib.parse
@@ -23,6 +24,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REDES_ROOT = (PROJECT_ROOT / "redes").resolve()
+PANEL_ROOT = (PROJECT_ROOT / "panel").resolve()
 
 if str(PROJECT_ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
@@ -30,6 +32,7 @@ if str(PROJECT_ROOT / "scripts") not in sys.path:
 import content_manager  # noqa: E402
 import database  # noqa: E402
 import ig_publisher  # noqa: E402
+import panel_api  # noqa: E402
 import panel_mensajes  # noqa: E402
 import socio_chat  # noqa: E402
 
@@ -55,6 +58,22 @@ def _archivo_seguro_de_pieza(content_id: int, lamina: int = 0) -> Path | None:
     if not ruta.is_file():
         return None
     if ruta.suffix.lower() not in (".png", ".jpg", ".jpeg", ".mp4"):
+        return None
+    return ruta
+
+
+_MIME_ESTATICOS = {".html": "text/html; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg",
+                   ".jpeg": "image/jpeg", ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json"}
+
+
+def _archivo_estatico_de_panel(ruta_rel: str) -> Path | None:
+    """Solo sirve archivos que vivan de verdad dentro de `panel/` (nunca `.env` ni nada fuera)."""
+    ruta = (PANEL_ROOT / ruta_rel.lstrip("/")).resolve()
+    try:
+        ruta.relative_to(PANEL_ROOT)
+    except ValueError:
+        return None
+    if not ruta.is_file() or ruta.suffix.lower() not in _MIME_ESTATICOS:
         return None
     return ruta
 
@@ -192,6 +211,28 @@ class ManejadorPanel(BaseHTTPRequestHandler):
             return
         self.send_error(404)
 
+    def _responder_json(self, cuerpo_obj: object, status: int = 200) -> None:
+        cuerpo = json.dumps(cuerpo_obj, ensure_ascii=False, default=str).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(cuerpo)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(cuerpo)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _leer_json_post(self) -> dict:
+        largo = min(1 << 16, max(0, int(self.headers.get("Content-Length") or "0")))
+        crudo = self.rfile.read(largo).decode("utf-8", errors="replace")
+        try:
+            datos = json.loads(crudo) if crudo.strip() else {}
+            return datos if isinstance(datos, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         ruta = parsed.path
@@ -218,9 +259,62 @@ class ManejadorPanel(BaseHTTPRequestHandler):
             self._servir_media(ruta.removeprefix("/media/").strip("/"), solo_headers=False)
             return
 
+        if ruta == "/api/estado":
+            database.init_db()
+            self._responder_json(panel_api.construir_estado_monitor())
+            return
+
+        if ruta == "/monitor.html" or ruta.startswith("/assets/"):
+            archivo = _archivo_estatico_de_panel(ruta)
+            if not archivo:
+                self.send_error(404)
+                return
+            datos = archivo.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", _MIME_ESTATICOS[archivo.suffix.lower()])
+            self.send_header("Content-Length", str(len(datos)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(datos)
+            return
+
         self.send_error(404)
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/api/preguntar":
+            database.init_db()
+            datos = self._leer_json_post()
+            pregunta = str(datos.get("pregunta") or "").strip()
+            if not pregunta:
+                self._responder_json({"respuesta": "Escribe algo en el cuadro antes de preguntar."}, 400)
+                return
+            self._responder_json({"respuesta": panel_api.responder_pregunta(pregunta)})
+            return
+
+        if self.path == "/api/accion":
+            database.init_db()
+            datos = self._leer_json_post()
+            accion = str(datos.get("accion") or "")
+            if accion in ("pausar_lead", "reactivar_lead"):
+                try:
+                    lead_id = int(datos.get("lead_id"))
+                except (TypeError, ValueError):
+                    self._responder_json({"error": "lead_id inválido"}, 400)
+                    return
+                resultado = panel_api.accion_pausar_lead(lead_id, pausado=(accion == "pausar_lead"))
+                self._responder_json(resultado)
+                return
+            if accion == "reintentar_ig":
+                try:
+                    content_id = int(datos.get("content_id"))
+                except (TypeError, ValueError):
+                    self._responder_json({"ok": False, "error": "content_id inválido"}, 400)
+                    return
+                self._responder_json(panel_api.accion_reintentar_ig(content_id))
+                return
+            self._responder_json({"error": "acción desconocida"}, 404)
+            return
+
         if self.path != "/accion":
             self.send_error(404)
             return

@@ -1771,7 +1771,13 @@ class TestColchonDeLaCola(BaseConBDTemporal):
 
         import prospect_hunter  # noqa: PLC0415
 
+        # Las fuentes de respaldo salen a internet: en pruebas se tapan todas, o la
+        # suite se vuelve lenta y frágil (pasó de 15 segundos a 8 minutos).
         with mock.patch.object(prospect_hunter, "discover_new_prospects", falso_descubrir), \
+             mock.patch.object(prospect_hunter, "rescatar_personas_de_descartados",
+                               return_value={"guardados": 0}), \
+             mock.patch.object(prospect_hunter, "descubrir_por_openstreetmap",
+                               return_value={"guardados": 0}), \
              mock.patch.object(autopilot_dispatcher, "get_daily_limit", return_value=15):
             res = autopilot_dispatcher.ensure_daily_pipeline(force=True)
 

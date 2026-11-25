@@ -520,6 +520,37 @@ def ensure_daily_pipeline(*, force: bool = False) -> dict[str, object]:
     except Exception:
         pass
 
+    # Fuentes de respaldo, de la más barata a la más lenta. Los buscadores devuelven
+    # siempre a los mismos y casi nunca publican a una persona: estas dos sí.
+    added_rescate = 0
+    added_osm = 0
+    if a_buscar > 0:
+        try:
+            res_rescate = prospect_hunter.rescatar_personas_de_descartados(limit=6)
+            added_rescate = int(res_rescate.get("guardados") or 0)
+            a_buscar -= added_rescate
+        except Exception:
+            pass
+
+    if a_buscar > 0:
+        try:
+            # OSM se consulta por ciudad: 2 por corrida, rotando, para no gastar
+            # 10 minutos del turno del motor en una sola pasada.
+            todas = prospect_hunter.OSM_CIUDADES
+            try:
+                cur = int(settings.get("osm_city_cursor", "0"))
+            except ValueError:
+                cur = 0
+            tanda = tuple(todas[(cur + i) % len(todas)] for i in range(2))
+            res_osm = prospect_hunter.descubrir_por_openstreetmap(
+                needed=min(a_buscar, 6), ciudades=tanda,
+            )
+            added_osm = int(res_osm.get("guardados") or 0)
+            a_buscar -= added_osm
+            database.update_settings({"osm_city_cursor": str((cur + 2) % len(todas))})
+        except Exception:
+            pass
+
     if deficit > 0 and settings.get("autopilot_reengage_enabled", "1") != "0":
         candidates = database.list_reengagement_candidates(limit=min(deficit, 3))
         for cand in candidates:
@@ -537,6 +568,7 @@ def ensure_daily_pipeline(*, force: bool = False) -> dict[str, object]:
     return {
         "daily_limit": daily_limit, "sent_today": sent_today,
         "added_discovered": added_discovered, "added_reengaged": added_reengaged,
+        "added_rescate": added_rescate, "added_osm": added_osm,
         "remaining_deficit": max(0, deficit),
         "en_cola": database.count_leads_en_cola(),
         "colchon_objetivo": colchon_objetivo,

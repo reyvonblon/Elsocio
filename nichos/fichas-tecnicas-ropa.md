@@ -43,4 +43,8 @@ confeccion paquete completo ropa Pereira contacto | Confección y Paquete Comple
 marca de lenceria pijamas diseño Medellin contacto | Marca de Lencería y Pijamería
 patronaje escalado moldes ropa Bogota contacto | Patronaje y Desarrollo de Producto
 desarrollo de producto moda marca Medellin contacto | Patronaje y Desarrollo de Producto
+marca de ropa Medellin "nuestro equipo" | Marca de Ropa Independiente
+marca de ropa Bogota "quienes somos" fundadora | Marca de Ropa Independiente
+confeccion ropa Medellin "nuestro equipo" contacto | Confección y Paquete Completo
+taller de confeccion Bogota "quienes somos" | Confección y Maquila de Ropa
 ```
