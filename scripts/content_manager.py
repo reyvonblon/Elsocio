@@ -29,6 +29,7 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -283,6 +284,23 @@ def leer_reel(nota: str | None) -> tuple[str, list[str]]:
     return escena, etiquetas
 
 
+def escenas_usadas_hoy() -> set[str]:
+    """Escenas isométricas ya encoladas hoy (cualquier tipo): piezas del mismo día no deben
+    reciclar el mismo fondo/cámara, aunque hablen de nichos distintos."""
+    if not database.DB_PATH.exists():
+        return set()
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    usadas: set[str] = set()
+    for p in database.list_content(limit=60):
+        if not str(p.get("created_at") or "").startswith(hoy):
+            continue
+        if str(p.get("estado") or "") == "descartado":
+            continue
+        escena, _ = leer_reel(p.get("nota"))
+        usadas.add(escena)
+    return usadas
+
+
 # ------------------------------------------------------------------ la guarda de precios
 
 def revisar_pieza(
@@ -297,6 +315,7 @@ def revisar_pieza(
     """
     motivos = sales_agent.revisar_guarda_precios(gancho, guion, caption, *(etiquetas or []))
     motivos.extend(_cifras_en_pantalla(gancho, guion, caption, *(etiquetas or [])))
+    motivos.extend(_pide_interaccion(gancho, guion, caption, *(etiquetas or [])))
     return motivos
 
 
@@ -313,6 +332,57 @@ def _cifras_en_pantalla(*textos: str) -> list[str]:
     for t in textos:
         if _RE_DIGITO.search(str(t or "")):
             malos.append(f"cifra_en_pantalla: {' '.join(str(t).split())[:60]!r}")
+    return malos
+
+
+# La interaccion se MERECE, no se pide. Un reel que dice "comenta SI si te pasa" sube el contador
+# hoy y quema la credibilidad que es justo lo que se esta vendiendo. Peor: el ciclo de insights
+# aprenderia que la carnada paga (es la forma mas confiable de producir comentarios) y produciria
+# mas de eso hasta que la cuenta sea indistinguible de cualquier cuenta de bajo esfuerzo.
+# Va como guarda y no como instruccion del prompt a proposito: una instruccion se obedece hoy y se
+# diluye en tres semanas; una guarda rechaza la pieza y no se negocia.
+#
+# Se exige PAREJA (verbo imperativo + objeto de plataforma) para no censurar el habla normal:
+# "el taller guarda las telas" y "el local comparte pared con el vecino" tienen que seguir pasando.
+# Se compara sobre el texto sin tildes, asi que los patrones van sin tildes.
+_VERBO_PEDIR_COMENTARIO = (
+    r"coment(?:a|ame|amelo|en)|escrib(?:e|eme)|dime|digame|cuentame|"
+    r"dej(?:a|ame|alo)|respond(?:e|eme)"
+)
+_OBJETO_COMENTARIO = r"comentario|comentarios|abajo|aqui|aca|debajo"
+_VERBO_PEDIR_ACCION = (
+    r"dale|pon(?:me|ga)?|mand(?:a|ame)|etiquet(?:a|en)|compart(?:e|elo|an)|"
+    r"guard(?:a|alo)|activ(?:a|en)|sube"
+)
+_OBJETO_ACCION = (
+    r"like|likes|me gusta|corazon|emoji|notificacion|notificaciones|"
+    r"este post|este reel|este video|esta publicacion|"
+    r"a (?:un|una|algun|alguien)"
+)
+# Lo que es carnada por si solo, sin necesitar objeto.
+_PEDIDO_SUELTO = r"sigueme|siguenos|doble tap|dale like|link en bio|comenta ya"
+
+_RE_PEDIR = (
+    re.compile(rf"\b(?:{_VERBO_PEDIR_COMENTARIO})\b[^.!?]{{0,24}}?\b(?:{_OBJETO_COMENTARIO})\b"),
+    re.compile(rf"\b(?:{_VERBO_PEDIR_ACCION})\b[^.!?]{{0,24}}?\b(?:{_OBJETO_ACCION})\b"),
+    re.compile(rf"\b(?:{_PEDIDO_SUELTO})\b"),
+    # "Comenta SI si te pasa" es el arquetipo y no trae objeto: pide escribir una palabra suelta.
+    # Se ancla al ARRANQUE de frase para leerlo como imperativo y no pisar el presente de tercera
+    # persona, que se escribe igual ("el cliente comenta que no le gusto" tiene que pasar).
+    re.compile(r"(?:^|[.!?]\s*)coment(?:a|en|ale)\b"),
+)
+
+
+def _pide_interaccion(*textos: str) -> list[str]:
+    """Carnada de interaccion: pedir comentario, like, guardado, compartido o seguimiento."""
+    malos: list[str] = []
+    for t in textos:
+        limpio = _sin_tildes(str(t or ""))
+        for rx in _RE_PEDIR:
+            m = rx.search(limpio)
+            if m:
+                malos.append(f"pide_interaccion: {m.group(0)[:40]!r}")
+                break
     return malos
 
 
@@ -372,21 +442,11 @@ def _badge_de_nicho(nicho: str | None) -> str:
 # "Link en bio" no va dentro del video: se ve barato. El link vive en el pie de publicación.
 LINEA_MARCA = "Con El Socio, te lo solucionamos."
 
-# No todo cierre habla de un local (Taller/Tienda/Agencia): a veces el contraste es de PERSONA
-# (el dueño mismo) y a veces es una sola frase directa sin A/B. Los 3 rotan determinista por el
-# gancho (mismo reel = mismo cierre si se regenera). `comun.tsx.frasesCierre` solo exige >=2
-# oraciones y que la última diga "Socio": cualquiera de los 3 pasa tal cual, sin caer al texto
-# por defecto del lado de Remotion.
-CIERRE_TIPOS = ("lugar", "persona", "directo")
-CIERRE_PERSONA = "No seas la persona A. Sé la persona B. Con El Socio, te lo solucionamos."
-CIERRE_DIRECTO = "Sé la persona inteligente. Ve donde El Socio."
-
-
-def _cierre_tipo(gancho: str) -> str:
-    firma = sum(ord(c) for c in (gancho or ""))
-    return CIERRE_TIPOS[firma % len(CIERRE_TIPOS)]
-
-
+# El cuerpo del reel siempre muestra un lugar (Taller/Local/Tienda/Agencia) pasando de caos (A) a
+# orden (B) — así lo pide la guía de estilo (§2, §6: "A vs B, literal"). El cierre tiene que nombrar
+# ESE MISMO lugar para decir sin dudas cuál de los dos es el que trabaja con El Socio. Antes rotaba
+# con cierres de "persona" o frases sueltas sin A/B, y el video terminaba hablando de algo distinto a
+# lo que mostró: quedaba sin decir cuál era el bueno. Un solo cierre, siempre.
 _LOTE_POR_NICHO = {
     "fichas-tecnicas-ropa": ("el", "Taller"),
     "modelado-3d-espacios": ("el", "Local"),
@@ -424,13 +484,7 @@ def nicho_visual(nicho: str | None, textos: list[str]) -> str:
 
 
 def cierre_de_venta(nicho: str | None, textos: list[str]) -> str:
-    """Rota 3 cierres: 'No seas el Taller A...' (lugar), 'No seas la persona A...' (persona)
-    o 'Sé la persona inteligente. Ve donde El Socio.' (directo, sin A/B)."""
-    tipo = _cierre_tipo(textos[0] if textos else "")
-    if tipo == "persona":
-        return CIERRE_PERSONA
-    if tipo == "directo":
-        return CIERRE_DIRECTO
+    """'No seas el Taller A. Sé el Taller B.' — siempre nombra el mismo lugar que mostró el reel."""
     articulo, lugar = _LOTE_POR_NICHO[nicho_visual(nicho, textos)]
     return f"No seas {articulo} {lugar} A. Sé {articulo} {lugar} B. {LINEA_MARCA}"
 

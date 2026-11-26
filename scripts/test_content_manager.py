@@ -174,10 +174,8 @@ class TestGenerar(BaseContenido):
         import json
         props = json.loads(cmd[2])
         self.assertEqual(props["bloques"], ["Primer bloque", "Segundo bloque"])
-        # El cierre del video ya no es el pie de publicación: es el cierre de venta de marca.
-        # Rota entre 3 variantes (lugar/persona/directo, ver `cierre_de_venta`): las 3 nombran
-        # a "El Socio" en la última oración, pero solo "lugar"/"persona" terminan en LINEA_MARCA
-        # literal — "directo" es una frase corta aparte.
+        # El cierre del video ya no es el pie de publicación: es el cierre de venta de marca,
+        # siempre "No seas el <lugar> A. Sé el <lugar> B." (ver `cierre_de_venta`).
         self.assertIn("Socio", props["cierre"])
         self.assertNotIn("link en bio", props["cierre"].lower())
 
@@ -721,6 +719,63 @@ class TestCarrusel(unittest.TestCase):
             res = content_manager.archivos_carrusel(d / "content_0009_01.png")
             self.assertEqual([p.name for p in res],
                              ["content_0009_01.png", "content_0009_02.png", "content_0009_03.png"])
+
+
+# ----------------------------------------------------- la interaccion se merece, no se pide
+
+class TestGuardaCarnada(BaseContenido):
+    """Pedir comentario/like/guardado/compartido bloquea la pieza.
+
+    No es una preferencia de estilo: si la carnada sale al aire, el ciclo de insights aprende
+    que pedir comentarios paga (es la forma mas confiable de producirlos) y el motor se vuelve
+    una cuenta de bajo esfuerzo sola. Por eso va en la guarda y no en el prompt.
+    """
+
+    CARNADA = (
+        "Comenta SI si te pasa",
+        "Comentame abajo que opinas",
+        "Deja un comentario",
+        "Dale like si te sirvio",
+        "Pon un corazon si te identificas",
+        "Etiqueta a un amigo que lo necesite",
+        "Comparte este reel",
+        "Guarda este video",
+        "Activa las notificaciones",
+        "Sigueme para mas",
+        "Doble tap",
+        "Link en bio",
+    )
+
+    HABLA_NORMAL = (
+        "El taller guarda las telas sin orden",
+        "El local comparte pared con el vecino",
+        "La modista deja la prenda a medio hacer",
+        "Pon la tela aqui y el patron se dibuja solo",
+        "El cliente comenta que no le gusto el lote",
+    )
+
+    def test_la_carnada_no_entra_a_la_cola(self) -> None:
+        for texto in self.CARNADA:
+            with self.assertRaises(content_manager.GuardaBloqueada, msg=texto):
+                content_manager.encolar(tipo="video", gancho="Frase limpia", guion=texto)
+        self.assertEqual(database.list_content(), [], "una pieza con carnada quedo en la BD")
+
+    def test_la_carnada_en_el_caption_tambien_bloquea(self) -> None:
+        with self.assertRaises(content_manager.GuardaBloqueada):
+            content_manager.encolar(tipo="post", gancho="Frase limpia",
+                                    caption="Guarda este post para cuando te toque")
+        self.assertEqual(database.list_content(), [])
+
+    def test_el_habla_normal_sigue_pasando(self) -> None:
+        """La guarda exige pareja verbo+objeto justo para no censurar el idioma."""
+        for texto in self.HABLA_NORMAL:
+            self.assertEqual(content_manager.revisar_pieza(texto), [], f"bloqueo de mas: {texto!r}")
+
+    def test_el_motivo_dice_que_fue_carnada(self) -> None:
+        with self.assertRaises(content_manager.GuardaBloqueada) as ctx:
+            content_manager.encolar(tipo="video", gancho="Dale like si te sirvio")
+        self.assertTrue(any("pide_interaccion" in m for m in ctx.exception.motivos),
+                        f"motivos sin pide_interaccion: {ctx.exception.motivos}")
 
 
 if __name__ == "__main__":
