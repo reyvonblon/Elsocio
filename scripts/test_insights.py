@@ -18,6 +18,7 @@ if str(PROJECT_ROOT / "scripts") not in sys.path:
 
 import database  # noqa: E402
 import insights_collector as ic  # noqa: E402
+import renovar_token_ig as rt  # noqa: E402
 
 DB_REAL = PROJECT_ROOT / "data" / "el_socio.db"
 
@@ -238,6 +239,112 @@ class TestRecolector(BaseInsights):
             res = ic.capturar()
         self.assertTrue(any("comentarios no leídos" in a for a in res["avisos"]))
         self.assertEqual(database.metricas_de(pid, "24h")["comentarios_reales"], 0)
+
+
+# ----------------------------------------------------- 6. renovar el token de Meta
+
+class TestRenovarToken(BaseInsights):
+    """La cadena corto -> largo -> pagina, y la regla de no guardar nada sin confirmar."""
+
+    CFG = {"IG_APP_ID": "APP", "IG_APP_SECRET": "SECRETO", "IG_USER_ID": "17841400000000000"}
+
+    def test_sin_app_id_no_sale_a_la_red(self) -> None:
+        with mock.patch.object(rt.ig_publisher, "cargar_config_ig", return_value={}):
+            res = rt.renovar("EAAcorto")
+        self.assertFalse(res["ok"])
+        self.assertIn("IG_APP_ID", res["error"])
+
+    def test_un_token_de_instagram_login_se_rechaza_con_la_razon(self) -> None:
+        with mock.patch.object(rt.ig_publisher, "cargar_config_ig", return_value=self.CFG):
+            res = rt.renovar("IGAAsomething")
+        self.assertFalse(res["ok"])
+        self.assertIn("Instagram Login", res["error"])
+
+    def test_un_token_corto_ya_vencido_se_detecta_antes_de_intercambiar(self) -> None:
+        with mock.patch.object(rt.ig_publisher, "cargar_config_ig", return_value=self.CFG), \
+             mock.patch.object(rt, "_vencimiento",
+                               return_value={"valido": False, "vence_en": "ayer", "dias": -1,
+                                             "tipo": "USER", "permisos": []}), \
+             mock.patch.object(rt, "intercambiar_por_largo") as inter:
+            res = rt.renovar("EAAcorto")
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["paso"], 1)
+        inter.assert_not_called()
+
+    def test_la_pagina_se_escoge_por_id_de_instagram_no_por_nombre(self) -> None:
+        respuesta = {"data": [
+            {"id": "1", "name": "Otra marca", "access_token": "TOK_OTRA",
+             "instagram_business_account": {"id": "999", "username": "otra"}},
+            {"id": "2", "name": "El Socio", "access_token": "TOK_BUENO",
+             "instagram_business_account": {"id": "17841400000000000", "username": "elsociotuia"}},
+        ]}
+        with mock.patch.object(rt.ig_publisher, "_graph_get", return_value=respuesta):
+            token, info = rt.token_de_pagina("LARGO", "17841400000000000")
+        self.assertEqual(token, "TOK_BUENO")
+        self.assertEqual(info["ig_username"], "elsociotuia")
+
+    def test_si_ninguna_pagina_tiene_esa_cuenta_lo_dice_con_lo_que_vio(self) -> None:
+        respuesta = {"data": [{"id": "1", "name": "Otra", "access_token": "T",
+                               "instagram_business_account": {"id": "999"}}]}
+        with mock.patch.object(rt.ig_publisher, "_graph_get", return_value=respuesta):
+            with self.assertRaises(rt.ig_publisher.ErrorIG) as ctx:
+                rt.token_de_pagina("LARGO", "17841400000000000")
+        self.assertIn("999", str(ctx.exception))
+
+    def test_cadena_completa_guarda_el_token_de_pagina(self) -> None:
+        with mock.patch.object(rt.ig_publisher, "cargar_config_ig", return_value=self.CFG), \
+             mock.patch.object(rt, "_vencimiento",
+                               side_effect=[
+                                   {"valido": True, "vence_en": "en 1 h", "dias": 0.05,
+                                    "tipo": "USER", "permisos": ["instagram_basic"]},
+                                   {"valido": True, "vence_en": "en 60 d", "dias": 60.0,
+                                    "tipo": "USER", "permisos": []},
+                                   {"valido": True, "vence_en": "nunca", "dias": None,
+                                    "tipo": "PAGE", "permisos": []},
+                               ]), \
+             mock.patch.object(rt, "intercambiar_por_largo", return_value="LARGO"), \
+             mock.patch.object(rt, "token_de_pagina",
+                               return_value=("TOK_PAGINA", {"pagina": "El Socio"})), \
+             mock.patch.object(rt.ig_publisher, "verificar_acceso_ig",
+                               return_value={"puede_publicar": True}):
+            res = rt.renovar("EAAcorto")
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["vence_en"], "nunca")
+        self.assertEqual(database.get_settings()["ig_access_token"], "TOK_PAGINA")
+        self.assertEqual(database.get_settings()["ig_token_tipo"], "pagina")
+
+    def test_si_meta_no_confirma_no_se_guarda_nada(self) -> None:
+        """Misma regla que el resto del motor: token sin confirmar no entra."""
+        with mock.patch.object(rt.ig_publisher, "cargar_config_ig", return_value=self.CFG), \
+             mock.patch.object(rt, "_vencimiento",
+                               return_value={"valido": True, "vence_en": "x", "dias": 1,
+                                             "tipo": "USER", "permisos": []}), \
+             mock.patch.object(rt, "intercambiar_por_largo", return_value="LARGO"), \
+             mock.patch.object(rt, "token_de_pagina", return_value=("TOK", {})), \
+             mock.patch.object(rt.ig_publisher, "verificar_acceso_ig",
+                               return_value={"puede_publicar": False, "motivo": "restringido"}):
+            res = rt.renovar("EAAcorto")
+        self.assertFalse(res["ok"])
+        self.assertNotIn("ig_access_token", database.get_settings())
+
+    def test_dry_run_verifica_pero_no_guarda(self) -> None:
+        with mock.patch.object(rt.ig_publisher, "cargar_config_ig", return_value=self.CFG), \
+             mock.patch.object(rt, "_vencimiento",
+                               return_value={"valido": True, "vence_en": "nunca", "dias": None,
+                                             "tipo": "PAGE", "permisos": []}), \
+             mock.patch.object(rt, "intercambiar_por_largo", return_value="LARGO"), \
+             mock.patch.object(rt, "token_de_pagina", return_value=("TOK", {})), \
+             mock.patch.object(rt.ig_publisher, "verificar_acceso_ig",
+                               return_value={"puede_publicar": True}):
+            res = rt.renovar("EAAcorto", dry_run=True)
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["guardado"])
+        self.assertNotIn("ig_access_token", database.get_settings())
+
+    def test_el_token_nunca_se_imprime_completo(self) -> None:
+        pista = rt._pista("EAAbcdefghijklmnop")
+        self.assertNotIn("bcdefghijklmnop", pista)
+        self.assertTrue(pista.startswith("EAAb"))
 
 
 if __name__ == "__main__":
