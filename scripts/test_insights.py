@@ -449,5 +449,61 @@ class TestFuenteDeConfig(unittest.TestCase):
         self.assertNotIn("renovar_token_ig.estado_token(cfg)", fuente)
 
 
+# ----------------------------------------------------- 9. piezas archivadas
+
+class TestPiezaArchivada(BaseInsights):
+    """Archivar una pieza en IG la saca de la API: su ID deja de resolver."""
+
+    def _captura_con_media_perdida(self, pid: int):
+        return mock.patch.multiple(
+            ic,
+            insights_de_media=mock.DEFAULT, comentarios_de_media=mock.DEFAULT,
+            duracion_de=mock.DEFAULT,
+        )
+
+    def test_una_media_perdida_se_marca_y_no_se_vuelve_a_pedir(self) -> None:
+        pid = self.reel_publicado(horas=30)
+        error = ic.ig_publisher.ErrorIG(
+            "Meta HTTP 400: Object with ID '123' does not exist, cannot be loaded")
+        with mock.patch.object(ic.ig_publisher, "cargar_config_ig",
+                               return_value={"IG_ACCESS_TOKEN": "T", "IG_USER_ID": ""}), \
+             mock.patch.object(ic.ig_publisher, "_url_base_graph", return_value="https://x"), \
+             mock.patch.object(ic, "insights_de_media", side_effect=error), \
+             mock.patch.object(ic, "comentarios_de_media", return_value=(0, 0, "")), \
+             mock.patch.object(ic, "duracion_de", return_value=0.0):
+            primera = ic.capturar()
+        self.assertEqual(len(primera["fallos"]), 1)
+        self.assertEqual(database.get_content(pid)["error_ig"], ic.MARCA_SIN_MEDIO)
+        # La segunda pasada ya no la pide: su dato esta perdido, reintentar es ruido.
+        self.assertEqual(database.reels_por_capturar("24h", horas_minimas=24), [])
+
+    def test_el_dry_run_no_marca_nada(self) -> None:
+        pid = self.reel_publicado(horas=30)
+        error = ic.ig_publisher.ErrorIG("Object with ID '1' does not exist")
+        with mock.patch.object(ic.ig_publisher, "cargar_config_ig",
+                               return_value={"IG_ACCESS_TOKEN": "T", "IG_USER_ID": ""}), \
+             mock.patch.object(ic.ig_publisher, "_url_base_graph", return_value="https://x"), \
+             mock.patch.object(ic, "insights_de_media", side_effect=error), \
+             mock.patch.object(ic, "comentarios_de_media", return_value=(0, 0, "")), \
+             mock.patch.object(ic, "duracion_de", return_value=0.0):
+            ic.capturar(dry_run=True)
+        self.assertEqual(database.get_content(pid)["error_ig"], "")
+
+    def test_otro_error_de_meta_no_marca_la_pieza(self) -> None:
+        """Solo el 'does not exist' es definitivo; un fallo de red se reintenta."""
+        pid = self.reel_publicado(horas=30)
+        with mock.patch.object(ic.ig_publisher, "cargar_config_ig",
+                               return_value={"IG_ACCESS_TOKEN": "T", "IG_USER_ID": ""}), \
+             mock.patch.object(ic.ig_publisher, "_url_base_graph", return_value="https://x"), \
+             mock.patch.object(ic, "insights_de_media",
+                               side_effect=ic.ig_publisher.ErrorIG("Meta red: timeout")), \
+             mock.patch.object(ic, "comentarios_de_media", return_value=(0, 0, "")), \
+             mock.patch.object(ic, "duracion_de", return_value=0.0):
+            ic.capturar()
+        self.assertEqual(database.get_content(pid)["error_ig"], "")
+        self.assertEqual([p["id"] for p in database.reels_por_capturar("24h", horas_minimas=24)],
+                         [pid])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

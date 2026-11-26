@@ -38,6 +38,12 @@ METRICAS_REEL_MINIMAS = ("reach", "saved", "shares", "likes", "comments")
 
 VENTANAS = (("24h", 24.0), ("7d", 168.0))
 
+# Meta responde "does not exist" tanto si la pieza nunca se publico como si se ARCHIVO:
+# una media archivada sale de la API y su ID deja de resolver. En esta cuenta la causa
+# normal es archivar (Raymond lo hace el mismo dia), no un fallo de publicacion.
+# Se marca para no reintentarla en cada latido; su dato esta perdido sin recuperacion.
+MARCA_SIN_MEDIO = "media_archivada_o_borrada"
+
 
 # ------------------------------------------------------------------ clasificar comentarios
 
@@ -120,8 +126,16 @@ def comentarios_de_media(media_id: str, base: str, token: str) -> tuple[int, int
 
 
 def insights_de_cuenta(user_id: str, base: str, token: str) -> dict[str, int]:
-    datos = _valores(ig_publisher._graph_get(
-        f"{base}/{user_id}/insights", {"metric": "profile_views,reach", "period": "day"}, token))
+    # `profile_views` exige `metric_type=total_value`; `reach` se pide aparte porque con ese
+    # parametro cambia de forma. Dos llamadas baratas en vez de una que Meta rechaza entera.
+    datos: dict[str, int] = {}
+    for metrica, extra in (("profile_views", {"metric_type": "total_value"}), ("reach", {})):
+        try:
+            datos.update(_valores(ig_publisher._graph_get(
+                f"{base}/{user_id}/insights",
+                {"metric": metrica, "period": "day", **extra}, token)))
+        except ig_publisher.ErrorIG:
+            continue
     try:
         perfil = ig_publisher._graph_get(f"{base}/{user_id}", {"fields": "followers_count"}, token)
         datos["followers_count"] = int(perfil.get("followers_count") or 0)
@@ -147,6 +161,10 @@ def capturar(*, dry_run: bool = False) -> dict:
             try:
                 m = insights_de_media(media_id, base, token)
             except ig_publisher.ErrorIG as exc:
+                # "does not exist" = archivada, borrada, o nunca publicada. Se marca y no
+                # se vuelve a pedir: desarchivarla tampoco devuelve el historico.
+                if "does not exist" in str(exc) and not dry_run:
+                    database.update_content(pieza["id"], error_ig=MARCA_SIN_MEDIO)
                 fallos.append({"pieza": pieza["id"], "ventana": ventana, "error": str(exc)})
                 continue
             reales, emoji, aviso = comentarios_de_media(media_id, base, token)

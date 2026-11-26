@@ -64,6 +64,12 @@ content_metrics: pieza_id, ventana (24h|7d), alcance, guardados, compartidos,
 Tabla aparte de `content_queue` a propósito: las métricas son serie de tiempo. Sobrescribir
 `likes_ig` pierde la curva, que es donde está la información.
 
+**Regla operativa: no archivar un reel antes de los 7 días.** Una media archivada sale de Graph
+API — su `ig_media_id` responde `does not exist` igual que si nunca se hubiera publicado — y su
+dato se pierde sin recuperación: desarchivarla después no devuelve el histórico. Una pieza
+archivada antes de la captura de 7 días no aporta nada al aprendizaje del motor. El recolector la
+marca `media_archivada_o_borrada` y deja de pedirla.
+
 ## §5. Las tres guardas (sin estas el ciclo se autodestruye)
 
 1. **Muestra mínima.** Una dimensión no mueve su peso hasta tener **5 reels medidos a 7 días**.

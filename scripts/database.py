@@ -967,6 +967,7 @@ def reels_por_capturar(ventana: str, *, horas_minimas: float) -> list[dict]:
             "WHERE c.tipo = 'video' AND c.estado = 'publicado' "
             "  AND IFNULL(c.ig_media_id,'') <> '' AND c.published_at IS NOT NULL "
             "  AND m.id IS NULL "
+            "  AND IFNULL(c.error_ig,'') NOT LIKE '%media_archivada_o_borrada%' "
             "  AND (julianday('now') - julianday(c.published_at)) * 24.0 >= ? "
             "ORDER BY c.published_at",
             (ventana, float(horas_minimas)),
