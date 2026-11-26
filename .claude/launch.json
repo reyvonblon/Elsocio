@@ -4,8 +4,19 @@
     {
       "name": "monitor",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8799", "--directory", "panel"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8799",
+        "--directory",
+        "panel"
+      ],
       "port": 8799
+    },
+    {
+      "name": "panel",
+      "port": 8787,
+      "url": "http://localhost:8787"
     }
   ]
 }

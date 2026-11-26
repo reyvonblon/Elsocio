@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import subprocess
 import sys
 import urllib.parse
 from datetime import datetime
@@ -35,6 +36,18 @@ import ig_publisher  # noqa: E402
 import panel_api  # noqa: E402
 import panel_mensajes  # noqa: E402
 import socio_chat  # noqa: E402
+
+
+# ffmpeg/ffprobe en este Mac viven en ~/.local/bin, que no esta en el PATH minimo de launchd.
+# `env={"PATH": ...}` REEMPLAZA el entorno entero: una lista escrita a mano deja la herramienta
+# invisible y el fallo es mudo (un 404, una duracion 0.0). Se arma incluyendo ~/.local/bin.
+def _path_herramientas() -> str:
+    import os
+    from pathlib import Path as _P
+    partes = [str(_P.home() / ".local" / "bin"), "/usr/local/bin", "/opt/homebrew/bin",
+              "/usr/bin", "/bin"]
+    actual = os.environ.get("PATH", "")
+    return ":".join(partes + ([actual] if actual else []))
 
 
 def _archivo_seguro_de_pieza(content_id: int, lamina: int = 0) -> Path | None:
@@ -143,6 +156,45 @@ class ManejadorPanel(BaseHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args) -> None:  # noqa: ANN002
         return  # Silencioso en segundo plano
+
+    def _servir_poster(self, cid_txt: str) -> None:
+        """Miniatura para la cola del celular. Una imagen se sirve tal cual; de un video se
+        saca un fotograma con ffmpeg y se cachea al lado, para no re-extraerlo en cada scroll
+        (y para no mandar un mp4 entero por datos moviles solo para ver la caratula).
+        """
+        if not cid_txt.isdigit():
+            self.send_error(404)
+            return
+        archivo = _archivo_seguro_de_pieza(int(cid_txt), 0)
+        if not archivo:
+            self.send_error(404)
+            return
+        if archivo.suffix.lower() != ".mp4":
+            self._responder_binario(archivo.read_bytes(),
+                                    mimetypes.guess_type(archivo.name)[0] or "image/png")
+            return
+
+        poster = archivo.with_name(f"{archivo.stem}_poster.jpg")
+        if not poster.is_file():
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-v", "error", "-y", "-ss", "1", "-i", str(archivo),
+                     "-frames:v", "1", "-vf", "scale=360:-2", str(poster)],
+                    check=True, capture_output=True, timeout=25,
+                    env={"PATH": _path_herramientas()},
+                )
+            except Exception:
+                self.send_error(404)  # sin ffmpeg no hay caratula; el resto del panel sigue vivo
+                return
+        self._responder_binario(poster.read_bytes(), "image/jpeg")
+
+    def _responder_binario(self, datos: bytes, mime: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(datos)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(datos)
 
     def _servir_media(self, parte_id: str, solo_headers: bool = False) -> None:
         cid_txt, _, lamina_txt = parte_id.partition("_")
@@ -257,6 +309,10 @@ class ManejadorPanel(BaseHTTPRequestHandler):
 
         if ruta.startswith("/media/"):
             self._servir_media(ruta.removeprefix("/media/").strip("/"), solo_headers=False)
+            return
+
+        if ruta.startswith("/poster/"):
+            self._servir_poster(ruta.removeprefix("/poster/").strip("/"))
             return
 
         if ruta == "/api/estado":

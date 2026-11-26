@@ -244,6 +244,64 @@ def _detalle_conversion_dia(fecha: str) -> dict:
     }
 
 
+def construir_pendientes(limite: int = 30) -> dict:
+    """Lo que está en cola esperando salir, con su vista previa y si de verdad puede salir.
+
+    Lo importante no es solo listarlas: es decir CUÁLES NUNCA VAN A SALIR. Una pieza de un
+    tipo con cuota diaria 0 se queda en la cola para siempre, y el cerebro ya pagó tokens
+    pensándola y minutos de render haciéndola. Eso tiene que verse sin preguntarle a nadie.
+    """
+    import ig_publisher
+
+    cfg = ig_publisher.cargar_config_ig()
+    lims = ig_publisher.limites_diarios_ig(cfg)
+    topes = dict(lims["por_tipo"] or {})
+    usa_por_tipo = bool(lims["usa_por_tipo"])
+    hechos_hoy = database.ig_published_today_by_tipo()
+
+    piezas, muertas = [], 0
+    for fila in database.list_content(limit=120):
+        estado = str(fila.get("estado") or "")
+        if estado in ("publicado", "descartado"):
+            continue
+        tipo = str(fila.get("tipo") or "post").strip().lower()
+        tope = int(topes.get(tipo, 0)) if usa_por_tipo else int(lims["total"])
+        hoy = int(hechos_hoy.get(tipo, 0))
+        tiene_archivo = bool(str(fila.get("archivo") or "").strip())
+
+        if usa_por_tipo and tope <= 0:
+            puede, motivo = False, "cuota 0: nunca va a salir"
+            muertas += 1
+        elif hoy >= tope:
+            puede, motivo = False, "cuota de hoy llena, sale mañana"
+        elif not tiene_archivo:
+            puede, motivo = False, "falta renderizar"
+        else:
+            puede, motivo = True, "lista para salir"
+
+        piezas.append({
+            "id": int(fila["id"]),
+            "tipo": tipo,
+            "estado": estado,
+            "gancho": str(fila.get("gancho") or "")[:150],
+            "creada": _iso(fila.get("created_at")),
+            "tiene_archivo": tiene_archivo,
+            "preview": f"/poster/{int(fila['id'])}" if tiene_archivo else "",
+            "media": f"/media/{int(fila['id'])}" if tiene_archivo else "",
+            "puede_salir": puede,
+            "motivo": motivo,
+            "cupo": f"{hoy}/{tope}",
+        })
+        if len(piezas) >= limite:
+            break
+
+    # Las que nunca van a salir, primero: son las que exigen una decisión.
+    piezas.sort(key=lambda p: (p["puede_salir"], p["id"]))
+    return {"piezas": piezas, "total": len(piezas), "muertas": muertas,
+            "cuota": topes if usa_por_tipo else {"total": int(lims["total"])},
+            "publicado_hoy": hechos_hoy}
+
+
 def construir_estado_monitor() -> dict:
     database.init_db()
     hoy, ayer = _dia_iso(0), _dia_iso(1)
@@ -265,6 +323,7 @@ def construir_estado_monitor() -> dict:
             },
         },
         "conversion_detalle": {"hoy": detalle_hoy, "ayer": detalle_ayer},
+        "pendientes": construir_pendientes(),
     }
 
 

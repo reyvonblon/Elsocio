@@ -1,8 +1,9 @@
 #!/bin/bash
-# Genera una imagen de post para IG (fondo negro + frase + logo, 1080x1350).
+# Genera una imagen de post 1080x1350 para IG (vía Remotion + SwiftShader en Monterey).
 # Uso: ./generar_post.sh "La frase del post" nombre_salida
 
 set -e
+export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
 
 FRASE="$1"
 NOMBRE="${2:-post_$(date +%s)}"
@@ -15,20 +16,28 @@ fi
 cd "$(dirname "$0")"
 mkdir -p posts
 
-PORT=8891
-if ! lsof -i ":$PORT" >/dev/null 2>&1; then
-  (python3 -m http.server "$PORT" >/tmp/el_socio_redes_server.log 2>&1 &)
-  sleep 1
+PROPS=$(python3 -c "import json, sys; print(json.dumps({'frase': sys.argv[1]}, ensure_ascii=False))" "$FRASE")
+
+cd video-logo
+TMP_DIR="out/frames_post_$$"
+trap 'rm -rf "$TMP_DIR"' EXIT
+rm -rf "$TMP_DIR"
+
+npx remotion render LogoFrase "$TMP_DIR" \
+  --sequence \
+  --frames=45-45 \
+  --image-format=png \
+  --props="$PROPS" \
+  --browser-executable="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --is-production=false \
+  --gl=swiftshader \
+  --concurrency=1
+
+FRAME_GEN=$(ls "$TMP_DIR"/*.png 2>/dev/null | head -1)
+if [ -z "$FRAME_GEN" ]; then
+  echo "Error: Remotion no generó la imagen del post" >&2
+  exit 1
 fi
 
-ENCODED=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$FRASE")
-
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-  --headless --disable-gpu \
-  --user-data-dir="$(mktemp -d)" \
-  --no-first-run --no-default-browser-check \
-  --screenshot="posts/${NOMBRE}.png" \
-  --window-size=1080,1350 \
-  "http://localhost:${PORT}/plantilla_post.html?frase=${ENCODED}"
-
+mv -f "$FRAME_GEN" "../posts/${NOMBRE}.png"
 echo "Listo: redes/posts/${NOMBRE}.png"

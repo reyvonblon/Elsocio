@@ -2,7 +2,12 @@
 # Genera un video vertical para IG (fondo negro, paleta de El Socio).
 # Uso:
 #   ./generar_video.sh "La frase del video" nombre_salida                 # LogoFrase 1080x1350
-#   ./generar_video.sh --reel '{"gancho":"...","bloques":["a","b"],"cierre":"..."}' nombre  # 1080x1920
+#   ./generar_video.sh --reel '{"gancho":"...","bloques":["a","b"],"cierre":"...","planos":[...]}' nombre  # 1080x1920
+#
+# Los Reels salen con la composición "Reel", que elige el formato por props.formato:
+#   mundo (ciudad isométrica + cámara), collage (recortes de papel + mascota), duelo (A vs B partido).
+# El formato lo decide content_manager.py (rotación automática). Para forzar una composición:
+#   REEL_MOTOR=ReelMundo ./generar_video.sh --reel ...     (o ReelVertical, el motor viejo de 4 escenas)
 #
 # Por qué existe: en este Mac (macOS Monterey) el render de video nativo de
 # Remotion falla porque su compositor exige macOS 15 (Sequoia). La solución es
@@ -12,7 +17,7 @@
 set -e
 
 # Asegurar que /usr/local/bin esté en PATH cuando corra desde launchd en segundo plano.
-export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
+export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
 
 CON_VOZ=1
 ARGS=()
@@ -26,7 +31,7 @@ done
 set -- "${ARGS[@]}"
 
 if [ "$1" = "--reel" ]; then
-  COMPOSICION="ReelVertical"
+  COMPOSICION="${REEL_MOTOR:-Reel}"
   PROPS="$2"
   NOMBRE="${3:-reel_$(date +%s)}"
   if [ -z "$PROPS" ]; then
@@ -48,20 +53,48 @@ fi
 cd "$(dirname "$0")/video-logo"
 mkdir -p out
 
+# Dos renders a la vez chocan en la misma carpeta out/frames y arruinan ambos videos
+# (pasó el 2026-11-24 con una sesión manual corriendo en paralelo al cerebro automático).
+# Lock de carpeta (atómico, sin dependencias nuevas) para que el segundo render espere su turno.
+LOCKDIR="out/.render.lock"
+LOCK_TIMEOUT=1800  # 30 min: cubre el render más lento medido (13-20 min) con margen
+esperado=0
+while ! mkdir "$LOCKDIR" 2>/dev/null; do
+  PID_LOCK=$(cat "$LOCKDIR/pid" 2>/dev/null || true)
+  if [ -n "$PID_LOCK" ] && ! kill -0 "$PID_LOCK" 2>/dev/null; then
+    echo "Lock de render huérfano (proceso $PID_LOCK ya no existe), liberando..." >&2
+    rm -rf "$LOCKDIR"
+    continue
+  fi
+  if [ "$esperado" -ge "$LOCK_TIMEOUT" ]; then
+    echo "Error: otro render lleva más de ${LOCK_TIMEOUT}s usando out/frames. Abortando para no chocar." >&2
+    exit 5
+  fi
+  echo "Otro render está usando out/frames, esperando turno... (${esperado}s)"
+  sleep 10
+  esperado=$((esperado + 10))
+done
+echo $$ > "$LOCKDIR/pid"
+trap 'rm -rf "$LOCKDIR"' EXIT
+
 PISTA_VOZ=""
 PROPS_SYNC="out/${NOMBRE}_props.json"
 rm -f "$PROPS_SYNC" "out/${NOMBRE}_voz.m4a"
 
-if [ "$CON_VOZ" = "1" ] && [ "$COMPOSICION" = "ReelVertical" ]; then
+if [ "$CON_VOZ" = "1" ] && [ "$1" = "--reel" ]; then
   if python3 ../../scripts/voice_engine.py \
       --reel-props "$PROPS" \
       --out "out/${NOMBRE}_voz.m4a" \
       --out-props "$PROPS_SYNC"; then
     PISTA_VOZ="out/${NOMBRE}_voz.m4a"
     PROPS=$(cat "$PROPS_SYNC")
-    echo "Voz humana sincronizada lista: ${PISTA_VOZ}"
+    echo "Voz humana + diseño sonoro (-14 LUFS) listos: ${PISTA_VOZ}"
   else
-    echo "Aviso: no se pudo generar locución neuronal (red no disponible); se continúa sin pista de voz." >&2
+    # Nunca degradar a "solo SFX" ni "sin audio": un Reel sin voz real no se publica
+    # (se escucha solo un zumbido/tic). Falla aquí, antes del render caro de Remotion,
+    # para que content_manager.generar() lo marque como error y reintente luego.
+    echo "Error: no se pudo generar la locución neuronal (TTS). Un Reel sin voz real no se genera." >&2
+    exit 4
   fi
 fi
 

@@ -68,6 +68,18 @@ def clasificar_comentarios(textos: list[str]) -> tuple[int, int]:
 
 # ------------------------------------------------------------------ duración real del archivo
 
+# ffmpeg/ffprobe en este Mac viven en ~/.local/bin, que no esta en el PATH minimo de launchd.
+# `env={"PATH": ...}` REEMPLAZA el entorno entero: una lista escrita a mano deja la herramienta
+# invisible y el fallo es mudo (un 404, una duracion 0.0). Se arma incluyendo ~/.local/bin.
+def _path_herramientas() -> str:
+    import os
+    from pathlib import Path as _P
+    partes = [str(_P.home() / ".local" / "bin"), "/usr/local/bin", "/opt/homebrew/bin",
+              "/usr/bin", "/bin"]
+    actual = os.environ.get("PATH", "")
+    return ":".join(partes + ([actual] if actual else []))
+
+
 def duracion_de(archivo: str) -> float:
     """Duración en segundos vía ffprobe. 0.0 si el archivo ya no está (la retención queda NULL)."""
     ruta = Path(archivo or "")
@@ -80,7 +92,7 @@ def duracion_de(archivo: str) -> float:
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
              "-of", "csv=p=0", str(ruta)],
             capture_output=True, text=True, timeout=20, check=True,
-            env={"PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"},
+            env={"PATH": _path_herramientas()},
         ).stdout.strip()
         return float(salida) if salida else 0.0
     except Exception:
