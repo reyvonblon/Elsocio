@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import database
 import ig_publisher
+import notificar
 
 GRAPH = "https://graph.facebook.com/v21.0"
 
@@ -162,13 +163,106 @@ def renovar(token_corto: str, *, dry_run: bool = False) -> dict:
             "vence_en": estado_pagina["vence_en"]}
 
 
+# ------------------------------------------------------------------ el vigilante
+
+# Esto existe porque el token ya se murió en silencio varias veces y Raymond se enteraba
+# tarde, cuando el motor llevaba horas sin publicar. El renovador viejo
+# (`ig_publisher.renovar_token_ig_si_toca`) solo cubre tokens `IGA...`, así que para un token
+# `EAG...` de Facebook Login no hacía NADA y además no avisaba: daba falsa tranquilidad.
+#
+# El vigilante corre en cada latido (cada 15 min) y hace tres cosas:
+#   - si el token está muerto  -> suena el celular, no se descubre por casualidad
+#   - si es de usuario y le quedan pocos días -> lo cambia SOLO por uno de página (no vence)
+#   - si ya es de página sin vencimiento -> no hace nada y lo deja anotado
+DIAS_ALERTA_VENCIMIENTO = 10
+
+
+def estado_token(cfg: dict[str, str] | None = None) -> dict:
+    """Qué token hay, si sirve y cuándo vence. Nunca expone el token."""
+    cfg = ig_publisher.cargar_config_ig() if cfg is None else cfg
+    token = (cfg.get("IG_ACCESS_TOKEN") or "").strip()
+    app_id = (cfg.get("IG_APP_ID") or "").strip()
+    app_secret = (cfg.get("IG_APP_SECRET") or "").strip()
+    if not token:
+        return {"hay_token": False, "valido": False, "motivo": "no hay IG_ACCESS_TOKEN"}
+    if not app_id or not app_secret:
+        # Sin credenciales de app no se puede preguntar el vencimiento: al menos se comprueba
+        # si sirve. Mejor saber "sirve/no sirve" que no saber nada.
+        prueba = ig_publisher.verificar_acceso_ig(cfg)
+        return {"hay_token": True, "valido": bool(prueba.get("puede_publicar")),
+                "vence_en": "desconocido", "dias": None,
+                "motivo": "sin IG_APP_ID/IG_APP_SECRET no se puede leer el vencimiento"}
+    try:
+        est = _vencimiento(token, app_id, app_secret)
+    except ig_publisher.ErrorIG as exc:
+        return {"hay_token": True, "valido": False, "motivo": str(exc)}
+    return {"hay_token": True, **est}
+
+
+def vigilar_token(cfg: dict[str, str] | None = None, *, avisar: bool = True) -> dict:
+    """Revisa el token en cada latido. Avisa si murió y lo mejora solo si le queda poco."""
+    cfg = ig_publisher.cargar_config_ig() if cfg is None else cfg
+    est = estado_token(cfg)
+    sello = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if not est.get("valido"):
+        if avisar:
+            notificar.notificar_fallo(
+                f"El token de Instagram no sirve ({est.get('motivo', 'rechazado por Meta')}). "
+                "El motor no puede publicar hasta renovarlo.",
+                titulo="El Socio — token de Instagram caído")
+        database.update_settings({"ig_token_estado": "invalido", "ig_token_revisado_at": sello})
+        return {"ok": False, "accion": "alerta", "estado": est}
+
+    dias = est.get("dias")
+    if dias is None:  # expires_at == 0: no vence. Es el estado bueno.
+        database.update_settings({"ig_token_estado": "no_vence", "ig_token_vence": "nunca",
+                                  "ig_token_revisado_at": sello})
+        return {"ok": True, "accion": "ninguna", "estado": est}
+
+    if dias > DIAS_ALERTA_VENCIMIENTO:
+        database.update_settings({"ig_token_estado": "vigente",
+                                  "ig_token_vence": str(est.get("vence_en")),
+                                  "ig_token_revisado_at": sello})
+        return {"ok": True, "accion": "ninguna", "estado": est}
+
+    # Le queda poco y TODAVÍA sirve: es la única ventana para mejorarlo sin intervención.
+    # Un token de página derivado de este no vence, así que esto se hace una sola vez.
+    try:
+        pagina, info = token_de_pagina((cfg.get("IG_ACCESS_TOKEN") or "").strip(),
+                                       (cfg.get("IG_USER_ID") or "").strip())
+        prueba = ig_publisher.verificar_acceso_ig({**cfg, "IG_ACCESS_TOKEN": pagina})
+        if not prueba.get("puede_publicar"):
+            raise ig_publisher.ErrorIG("Meta no confirma el token de página derivado.")
+    except ig_publisher.ErrorIG as exc:
+        if avisar:
+            notificar.notificar_fallo(
+                f"Al token de Instagram le quedan {dias} días y no se pudo cambiar solo "
+                f"por uno de página ({exc}). Hay que renovarlo a mano antes de que venza.",
+                titulo="El Socio — token de Instagram por vencer")
+        database.update_settings({"ig_token_estado": "por_vencer",
+                                  "ig_token_vence": str(est.get("vence_en")),
+                                  "ig_token_revisado_at": sello})
+        return {"ok": False, "accion": "alerta_vencimiento", "estado": est, "error": str(exc)}
+
+    database.update_settings({"ig_access_token": pagina, "ig_token_tipo": "pagina",
+                              "ig_token_estado": "no_vence", "ig_token_vence": "nunca",
+                              "ig_token_refreshed_at": sello, "ig_token_revisado_at": sello})
+    return {"ok": True, "accion": "cambiado_a_token_de_pagina", "pagina": info.get("pagina")}
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Cambia el token corto de Meta por un token de página que no vence.")
     ap.add_argument("--token", default="", help="El token CORTO recién generado en la consola de Meta.")
     ap.add_argument("--dry-run", action="store_true", help="Verifica contra Meta pero no guarda.")
+    ap.add_argument("--estado", action="store_true",
+                    help="Solo dice qué token hay y cuándo vence. No cambia nada.")
     args = ap.parse_args(argv)
     database.init_db()
+    if args.estado:
+        print(json.dumps(estado_token(), ensure_ascii=False, indent=2))
+        return 0
     res = renovar(args.token.strip(), dry_run=args.dry_run)
     print(json.dumps(res, ensure_ascii=False, indent=2))
     if res.get("ok"):

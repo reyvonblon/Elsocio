@@ -347,5 +347,86 @@ class TestRenovarToken(BaseInsights):
         self.assertTrue(pista.startswith("EAAb"))
 
 
+# ----------------------------------------------------- 7. el vigilante del token
+
+class TestVigilanteToken(BaseInsights):
+    """Nunca más enterarse por casualidad de que el token murió."""
+
+    CFG = {"IG_ACCESS_TOKEN": "EAGtoken", "IG_APP_ID": "APP", "IG_APP_SECRET": "S",
+           "IG_USER_ID": "178414"}
+
+    def test_token_muerto_suena_el_celular(self) -> None:
+        with mock.patch.object(rt, "estado_token",
+                               return_value={"hay_token": True, "valido": False,
+                                             "motivo": "code 190"}), \
+             mock.patch.object(rt.notificar, "notificar_fallo") as aviso:
+            res = rt.vigilar_token(self.CFG)
+        self.assertFalse(res["ok"])
+        aviso.assert_called_once()
+        self.assertIn("no sirve", aviso.call_args[0][0])
+        self.assertEqual(database.get_settings()["ig_token_estado"], "invalido")
+
+    def test_token_de_pagina_no_hace_nada_y_lo_deja_anotado(self) -> None:
+        with mock.patch.object(rt, "estado_token",
+                               return_value={"hay_token": True, "valido": True,
+                                             "vence_en": "nunca", "dias": None}), \
+             mock.patch.object(rt.notificar, "notificar_fallo") as aviso:
+            res = rt.vigilar_token(self.CFG)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["accion"], "ninguna")
+        aviso.assert_not_called()
+        self.assertEqual(database.get_settings()["ig_token_estado"], "no_vence")
+
+    def test_token_con_meses_por_delante_no_se_toca(self) -> None:
+        with mock.patch.object(rt, "estado_token",
+                               return_value={"hay_token": True, "valido": True,
+                                             "vence_en": "2027-01-25", "dias": 45.0}), \
+             mock.patch.object(rt, "token_de_pagina") as cambio:
+            res = rt.vigilar_token(self.CFG)
+        self.assertEqual(res["accion"], "ninguna")
+        cambio.assert_not_called()
+        self.assertEqual(database.get_settings()["ig_token_estado"], "vigente")
+
+    def test_token_por_vencer_se_cambia_solo_por_uno_de_pagina(self) -> None:
+        """La única ventana para arreglarlo sin intervención es mientras todavía sirve."""
+        with mock.patch.object(rt, "estado_token",
+                               return_value={"hay_token": True, "valido": True,
+                                             "vence_en": "pronto", "dias": 4.0}), \
+             mock.patch.object(rt, "token_de_pagina",
+                               return_value=("TOK_PAGINA", {"pagina": "El Socio"})), \
+             mock.patch.object(rt.ig_publisher, "verificar_acceso_ig",
+                               return_value={"puede_publicar": True}):
+            res = rt.vigilar_token(self.CFG)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["accion"], "cambiado_a_token_de_pagina")
+        self.assertEqual(database.get_settings()["ig_access_token"], "TOK_PAGINA")
+        self.assertEqual(database.get_settings()["ig_token_estado"], "no_vence")
+
+    def test_si_el_cambio_automatico_falla_avisa_antes_de_que_venza(self) -> None:
+        with mock.patch.object(rt, "estado_token",
+                               return_value={"hay_token": True, "valido": True,
+                                             "vence_en": "pronto", "dias": 3.0}), \
+             mock.patch.object(rt, "token_de_pagina",
+                               side_effect=rt.ig_publisher.ErrorIG("sin pages_show_list")), \
+             mock.patch.object(rt.notificar, "notificar_fallo") as aviso:
+            res = rt.vigilar_token(self.CFG)
+        self.assertFalse(res["ok"])
+        aviso.assert_called_once()
+        self.assertIn("3", aviso.call_args[0][0])
+        self.assertEqual(database.get_settings()["ig_token_estado"], "por_vencer")
+
+    def test_sin_credenciales_de_app_al_menos_dice_si_sirve(self) -> None:
+        with mock.patch.object(rt.ig_publisher, "verificar_acceso_ig",
+                               return_value={"puede_publicar": True}):
+            est = rt.estado_token({"IG_ACCESS_TOKEN": "EAG"})
+        self.assertTrue(est["valido"])
+        self.assertEqual(est["vence_en"], "desconocido")
+
+    def test_sin_token_no_sale_a_la_red(self) -> None:
+        est = rt.estado_token({})
+        self.assertFalse(est["hay_token"])
+        self.assertFalse(est["valido"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
