@@ -154,6 +154,58 @@ def cambiar_modo_autonomo(activo: bool) -> bool:
     return activo
 
 
+def verificar_acceso_ig(cfg: dict[str, str] | None = None) -> dict[str, object]:
+    """Comprueba CONTRA META que el token pueda publicar en la cuenta de `IG_USER_ID`.
+
+    Antes `estado_ig` decía "credenciales listas" con solo mirar que el .env tuviera texto, y
+    por eso reportaba verde mientras Meta respondía "API access blocked" (pasó el 2026-11-26:
+    el token traía permiso para otra cuenta IG, no para la de El Socio). Aquí se lee el
+    `debug_token` oficial y se compara el `IG_USER_ID` con los `target_ids` a los que el
+    usuario realmente le concedió `instagram_content_publish`.
+    """
+    cfg = cargar_config_ig() if cfg is None else cfg
+    token = (cfg.get("IG_ACCESS_TOKEN") or "").strip()
+    user_id = (cfg.get("IG_USER_ID") or "").strip()
+    if not token:
+        return {"puede_publicar": False, "motivo": "falta_token",
+                "arreglo": "No hay IG_ACCESS_TOKEN en .env."}
+    base = _url_base_graph(cfg)
+    try:
+        d = _graph_get(f"{base}/debug_token", {"input_token": token}, token).get("data", {})
+    except ErrorIG as exc:
+        detalle = str(exc)
+        # Caso real del 2026-11-26: la app está en modo Desarrollo y el dueño del token no tiene
+        # rol ACEPTADO en ella. Invitar a alguien como administrador no basta: mientras no acepte
+        # la invitación desde su propia cuenta, Meta lo trata como si no tuviera rol.
+        if "on behalf of user" in detalle:
+            m = re.search(r"on behalf of user\s+(\d+)", detalle)
+            usuario = m.group(1) if m else ""
+            return {"puede_publicar": False, "motivo": "usuario_sin_rol_en_la_app",
+                    "usuario_rechazado": usuario, "detalle": detalle,
+                    "arreglo": ("La app está en modo Desarrollo y esta cuenta de Facebook no tiene rol ACEPTADO "
+                                "en ella. Invitarla no basta: hay que aceptar la invitación desde esa cuenta "
+                                "(developers.facebook.com → Solicitudes), o pasar la app a modo Live.")}
+        return {"puede_publicar": False, "motivo": "token_no_verificable", "detalle": detalle,
+                "arreglo": "Meta no acepta el token ni para inspeccionarlo: hay que generarlo de nuevo."}
+    if not d.get("is_valid"):
+        return {"puede_publicar": False, "motivo": "token_invalido",
+                "arreglo": "El token caducó o fue revocado: hay que generarlo de nuevo."}
+    autorizadas: list[str] = []
+    for g in d.get("granular_scopes") or []:
+        if g.get("scope") == "instagram_content_publish":
+            autorizadas = [str(x) for x in (g.get("target_ids") or [])]
+    if "instagram_content_publish" not in (d.get("scopes") or []):
+        return {"puede_publicar": False, "motivo": "sin_permiso_de_publicacion", "cuentas_autorizadas": autorizadas,
+                "arreglo": "El token no trae el permiso instagram_content_publish."}
+    if autorizadas and user_id and user_id not in autorizadas:
+        return {"puede_publicar": False, "motivo": "cuenta_no_autorizada",
+                "cuenta_configurada": user_id, "cuentas_autorizadas": autorizadas,
+                "arreglo": ("El token publica en otra cuenta de Instagram, no en la de El Socio. "
+                            "Hay que volver a generar el token marcando la cuenta correcta en el "
+                            "diálogo de Meta, o corregir IG_USER_ID si la cuenta buena es otra.")}
+    return {"puede_publicar": True, "cuenta_configurada": user_id, "cuentas_autorizadas": autorizadas}
+
+
 def estado_ig(cfg: dict[str, str] | None = None) -> dict[str, object]:
     """Resumen seguro para el panel y `--dry-run` (cero secretos expuestos)."""
     cfg = cargar_config_ig() if cfg is None else cfg
@@ -177,6 +229,8 @@ def estado_ig(cfg: dict[str, str] | None = None) -> dict[str, object]:
         "publicados_hoy": publicados_hoy,
         "publicados_por_tipo": por_tipo_hoy,
         "graph_base": _url_base_graph(cfg),
+        # Verificación real contra Meta: sin esto el panel daba verde con la cuenta rota.
+        "acceso_verificado": verificar_acceso_ig(cfg),
     }
 
 
