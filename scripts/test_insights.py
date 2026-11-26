@@ -428,5 +428,26 @@ class TestVigilanteToken(BaseInsights):
         self.assertFalse(est["valido"])
 
 
+# ----------------------------------------------------- 8. de donde sale la config del token
+
+class TestFuenteDeConfig(unittest.TestCase):
+    """El bug que casi manda una falsa alarma al celular cada 15 minutos.
+
+    `socio_cerebro` arma su `cfg` con `load_env_file()`, que lee SOLO `.env`. El token bueno
+    vive en `settings` y unicamente `cargar_config_ig()` lo resuelve. Si al vigilante se le
+    pasa el cfg de `.env`, mira un token viejo, lo declara muerto y avisa sin motivo.
+    """
+
+    def test_el_vigilante_no_recibe_el_cfg_de_env(self) -> None:
+        fuente = (Path(__file__).resolve().parent / "socio_cerebro.py").read_text()
+        self.assertIn("_ejecutar_seguro(renovar_token_ig.vigilar_token)", fuente)
+        self.assertNotIn("renovar_token_ig.vigilar_token, cfg=cfg", fuente)
+
+    def test_el_diagnostico_tampoco(self) -> None:
+        fuente = (Path(__file__).resolve().parent / "socio_cerebro.py").read_text()
+        self.assertIn("renovar_token_ig.estado_token()", fuente)
+        self.assertNotIn("renovar_token_ig.estado_token(cfg)", fuente)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

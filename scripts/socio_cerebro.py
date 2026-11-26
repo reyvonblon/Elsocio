@@ -65,7 +65,8 @@ def diagnostico_en_seco() -> dict[str, object]:
         "cerebro_contenido": cerebro.planear_y_crear_lote_diario(renderizar=False),
         "instagram_oficial": ig_publisher.estado_ig(cfg),
         # Solo lectura: dice que token hay y cuando vence, sin tocar nada.
-        "token_ig": renovar_token_ig.estado_token(cfg),
+        # Sin `cfg`: lo carga con `cargar_config_ig()`, que resuelve BD sobre `.env`.
+        "token_ig": renovar_token_ig.estado_token(),
         "motor_voz": {
             "proveedor_activo": voice_engine.elegir_proveedor(voice_engine.cargar_config_voz()),
             "voz_defecto": voice_engine.VOZ_EDGE_DEFECTO,
@@ -111,7 +112,7 @@ def correr_latido_autonomo(*, dry_run: bool = False, sin_contenido: bool = False
         # con el motor horas sin publicar. Se revisa en CADA latido: si murio suena el celular,
         # y si es un token de usuario al que le queda poco se cambia solo por uno de pagina
         # (que no vence). Nunca mas enterarse por casualidad.
-        reporte["token_ig"] = _ejecutar_seguro(renovar_token_ig.vigilar_token, cfg=cfg)
+        reporte["token_ig"] = _ejecutar_seguro(renovar_token_ig.vigilar_token)
 
         # 6 y 7: Contenido + Instagram (SOLO dentro de ventana 8:00-21:00 y tras atender ventas).
         if not sin_contenido and en_ventana:
