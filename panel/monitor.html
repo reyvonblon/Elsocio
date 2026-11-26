@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
+<title>El Socio · Monitor</title>
+
+<!-- PWA / iOS full screen -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="El Socio">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0a0a0a">
+<link rel="apple-touch-icon" href="assets/icono-180.png">
+<link rel="icon" href="assets/icono-180.png">
+<link rel="manifest" href="data:application/manifest+json,{%22name%22:%22El%20Socio%20Monitor%22,%22short_name%22:%22El%20Socio%22,%22display%22:%22standalone%22,%22background_color%22:%22%230a0a0a%22,%22theme_color%22:%22%230a0a0a%22,%22icons%22:[{%22src%22:%22assets/icono-512.png%22,%22sizes%22:%22512x512%22,%22type%22:%22image/png%22}]}">
+
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.462.0/dist/umd/lucide.min.js"></script>
+
+<style>
+  :root{
+    --bg:#0a0a0a; --panel:#141416; --card:#1c1c1e; --border:#2a2a2d;
+    --text:#f8fafc; --muted:#94a3b8; --faint:#6b6b70;
+    --wine:#9c1c2e; --wine-soft:rgba(156,28,46,.14);
+    --ok:#3fae6a; --ok-soft:rgba(63,174,106,.12);
+    --warn:#d4a62a; --warn-soft:rgba(212,166,42,.12);
+    --err:#c0392b; --err-soft:rgba(192,57,43,.14);
+  }
+  *{ -webkit-tap-highlight-color: transparent; overflow-wrap: anywhere; }
+  html{ width:100%; overflow-x:hidden; }
+  html,body{ background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  body{ width:100%; max-width:100vw; overflow-x:hidden; -webkit-font-smoothing:antialiased; overscroll-behavior-y:none; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+  ::-webkit-scrollbar{ display:none; }
+
+  .card{ background:var(--card); border:1px solid var(--border); border-radius:16px; }
+  .chip{ border:1px solid var(--border); border-radius:999px; }
+  .dot{ width:8px; height:8px; border-radius:50%; display:inline-block; }
+  .pulse{ animation:pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.35} }
+  .mono{ font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+  .sheet-enter{ transform: translateY(100%); }
+  .sheet{ transition: transform .28s cubic-bezier(.32,.72,0,1); }
+
+  .tab-active{ background:var(--wine); color:#fff; }
+  .tab-idle{ color:var(--muted); }
+
+  .skeleton{ background: linear-gradient(90deg, var(--card) 25%, var(--border) 37%, var(--card) 63%); background-size: 400% 100%; animation: shimmer 1.4s ease infinite; }
+  @keyframes shimmer{ 0%{background-position:100% 50%} 100%{background-position:0 50%} }
+</style>
+</head>
+<body class="min-h-screen" x-data="app()" x-init="init()">
+
+<!-- ============ HEADER ============ -->
+<header class="sticky top-0 z-30 px-4 pt-3 pb-3 border-b" style="background:rgba(10,10,10,.92); backdrop-filter:blur(10px); border-color:var(--border);">
+  <div class="flex items-center justify-between">
+    <div class="flex items-center gap-2">
+      <img src="assets/icono-180.png" class="w-8 h-8 rounded-lg" alt="El Socio">
+      <div>
+        <div class="text-[15px] font-semibold leading-tight">El Socio</div>
+        <div class="text-[11px] leading-tight" style="color:var(--faint);" x-text="conexion.ok ? 'Conectado' : 'Sin conexión'"></div>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <button @click="abrirConfig()" class="chip px-2.5 py-1.5" style="background:var(--card);">
+        <i data-lucide="plug-zap" class="w-4 h-4" :style="conexion.ok ? 'color:var(--ok)' : 'color:var(--faint)'"></i>
+      </button>
+      <div class="chip px-3 py-1.5 flex items-center gap-1.5" style="background:var(--card);">
+        <span class="dot" :class="estado.color==='verde' ? 'pulse' : ''" :style="'background:'+estadoColorHex(estado.color)"></span>
+        <span class="text-[12px] font-medium" x-text="estado.etiqueta"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pensamiento / acción actual -->
+  <div class="mt-3 rounded-xl px-3 py-2.5 flex items-start gap-2.5" :style="'background:'+estadoSoftHex(estado.color)+'; border:1px solid '+estadoColorHex(estado.color)+'33'">
+    <i data-lucide="activity" class="w-4 h-4 mt-0.5 shrink-0" :style="'color:'+estadoColorHex(estado.color)"></i>
+    <div class="min-w-0">
+      <div class="text-[13px] font-medium leading-snug" x-text="estado.accion_actual"></div>
+      <div class="text-[11px] mt-0.5" style="color:var(--faint);" x-text="'Actualizado hace ' + hace(estado.actualizado)"></div>
+    </div>
+  </div>
+</header>
+
+<main class="px-4 pb-28 pt-4 space-y-5 max-w-md mx-auto">
+
+  <!-- ============ MÉTRICAS: TAREAS ============ -->
+  <section class="grid grid-cols-3 gap-2.5">
+    <div class="card p-3">
+      <div class="text-[11px]" style="color:var(--faint);">Éxito hoy</div>
+      <div class="text-2xl font-bold mt-0.5" style="color:var(--ok);" x-text="metricas.tareas_ok">—</div>
+    </div>
+    <div class="card p-3">
+      <div class="text-[11px]" style="color:var(--faint);">Fallidas</div>
+      <div class="text-2xl font-bold mt-0.5" style="color:var(--err);" x-text="metricas.tareas_fail">—</div>
+    </div>
+    <div class="card p-3">
+      <div class="text-[11px]" style="color:var(--faint);">Tasa éxito</div>
+      <div class="text-2xl font-bold mt-0.5" x-text="tasaExito()+'%'">—</div>
+    </div>
+  </section>
+
+  <!-- ============ MÉTRICAS: NEGOCIO ============ -->
+  <section class="card p-4">
+    <div class="text-[13px] font-semibold mb-3 flex items-center gap-1.5">
+      <i data-lucide="trending-up" class="w-4 h-4" style="color:var(--wine);"></i> Negocio hoy
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      <div>
+        <div class="text-[11px]" style="color:var(--faint);">Correos activos</div>
+        <div class="text-xl font-bold mt-0.5" x-text="metricas.chats_activos">—</div>
+      </div>
+      <div>
+        <div class="text-[11px]" style="color:var(--faint);">Leads captados</div>
+        <div class="text-xl font-bold mt-0.5" x-text="metricas.leads_hoy">—</div>
+      </div>
+      <div>
+        <div class="text-[11px]" style="color:var(--faint);">Seguimientos pendientes</div>
+        <div class="text-xl font-bold mt-0.5" x-text="metricas.seguimientos_pendientes">—</div>
+      </div>
+      <div>
+        <div class="text-[11px]" style="color:var(--faint);">Gasto IA hoy</div>
+        <div class="text-xl font-bold mt-0.5" x-text="formatoGastoIA()">—</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CONVERSIÓN ============ -->
+  <section class="card p-4">
+    <div class="flex items-center justify-between mb-3">
+      <div class="text-[13px] font-semibold flex items-center gap-1.5">
+        <i data-lucide="filter" class="w-4 h-4" style="color:var(--wine);"></i>
+        <span x-text="diaConversion==='hoy' ? 'Conversión hoy' : 'Conversión ayer'"></span>
+      </div>
+      <button @click="diaConversion = diaConversion==='hoy' ? 'ayer' : 'hoy'" class="chip w-7 h-7 flex items-center justify-center shrink-0" :style="diaConversion==='ayer' ? 'background:var(--warn-soft); border-color:transparent;' : 'background:var(--card);'">
+        <i data-lucide="clock" class="w-3.5 h-3.5" :style="diaConversion==='ayer' ? 'color:#f0cf6a' : 'color:var(--faint)'"></i>
+      </button>
+    </div>
+    <div class="grid grid-cols-3 gap-2 text-center">
+      <button @click="verListaConversion='correos_enviados'" class="text-center">
+        <div class="text-[10px]" style="color:var(--faint);">Correos enviados</div>
+        <div class="text-xl font-bold mt-0.5" x-text="conversionActual().correos_enviados">—</div>
+      </button>
+      <button @click="verListaConversion='interesados'" class="text-center">
+        <div class="text-[10px]" style="color:var(--faint);">Interesados</div>
+        <div class="text-xl font-bold mt-0.5" style="color:var(--ok);" x-text="conversionActual().interesados">—</div>
+      </button>
+      <button @click="verListaConversion='comentarios_ig'" class="text-center">
+        <div class="text-[10px]" style="color:var(--faint);">Comentarios IG</div>
+        <div class="text-xl font-bold mt-0.5" x-text="conversionActual().comentarios_ig">—</div>
+      </button>
+    </div>
+    <div class="text-[10px] text-center mt-3" style="color:var(--faint);">Toca un número para ver el detalle</div>
+  </section>
+
+  <!-- ============ LOGS: FILTRO ============ -->
+  <section>
+    <div class="flex items-center justify-between mb-2.5">
+      <button @click="alternarLogs()" class="text-[13px] font-semibold flex items-center gap-1.5 -m-1 p-1"
+              :aria-expanded="logsAbierto ? 'true' : 'false'" aria-controls="panel-logs">
+        <i data-lucide="list-checks" class="w-4 h-4" style="color:var(--wine);"></i> Registro de tareas
+        <span class="inline-flex transition-transform" :class="logsAbierto ? 'rotate-180' : ''">
+          <i data-lucide="chevron-down" class="w-4 h-4" style="color:var(--faint);"></i>
+        </span>
+        <span x-show="!logsAbierto && logsFiltrados().length" x-cloak
+              class="text-[11px] font-normal" style="color:var(--faint);"
+              x-text="'(' + logsFiltrados().length + ')'"></span>
+      </button>
+      <button x-show="logsAbierto" x-cloak @click="cargar()" class="text-[11px] flex items-center gap-1" style="color:var(--faint);">
+        <span class="inline-flex" :class="cargando ? 'animate-spin' : ''"><i data-lucide="refresh-cw" class="w-3 h-3"></i></span> ahora
+      </button>
+    </div>
+    <div id="panel-logs" x-show="logsAbierto" x-cloak>
+    <div class="flex gap-1.5 mb-3">
+      <button @click="filtroLog='todas'" class="chip px-3 py-1.5 text-[12px] font-medium" :class="filtroLog==='todas' ? 'tab-active' : 'tab-idle'" :style="filtroLog!=='todas' ? 'background:var(--card)' : ''">Todas</button>
+      <button @click="filtroLog='fallidas'" class="chip px-3 py-1.5 text-[12px] font-medium" :class="filtroLog==='fallidas' ? 'tab-active' : 'tab-idle'" :style="filtroLog!=='fallidas' ? 'background:var(--card)' : ''">Fallidas ⚠️</button>
+      <button @click="filtroLog='ventas'" class="chip px-3 py-1.5 text-[12px] font-medium" :class="filtroLog==='ventas' ? 'tab-active' : 'tab-idle'" :style="filtroLog!=='ventas' ? 'background:var(--card)' : ''">Cierres ✅</button>
+    </div>
+
+    <div class="space-y-2">
+      <template x-for="log in logsFiltrados()" :key="log.id">
+        <div class="card p-3">
+          <div class="flex items-start gap-2.5">
+            <div class="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5" :style="'background:'+logSoft(log.tipo)">
+              <i :data-lucide="logIcono(log.tipo)" class="w-3.5 h-3.5" :style="'color:'+logColor(log.tipo)"></i>
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="text-[13px] leading-snug font-medium" x-text="log.mensaje"></div>
+              <div class="text-[11px] mt-1" style="color:var(--faint);" x-text="hace(log.hora) + (log.contacto ? ' · ' + log.contacto : '')"></div>
+              <div class="flex gap-2 mt-2 flex-wrap" x-show="log.tipo !== 'exito' || log.detalle">
+                <button x-show="log.tipo === 'fallo' && log.content_id" @click="reintentar(log)" :disabled="reintentando===log.id" class="chip px-2.5 py-1 text-[11px] font-medium" style="background:var(--err-soft); color:#ff8a7a; border-color:transparent;" x-text="reintentando===log.id ? 'Reintentando…' : 'Reintentar'"></button>
+                <button x-show="log.tipo === 'alerta'" @click="tomarControl(log)" class="chip px-2.5 py-1 text-[11px] font-medium" style="background:var(--warn-soft); color:#f0cf6a; border-color:transparent;">Tomar control</button>
+                <button x-show="log.detalle" @click="toggleDetalle(log.id)" class="chip px-2.5 py-1 text-[11px] font-medium flex items-center gap-1" style="background:var(--card); color:var(--faint);">
+                  <i :data-lucide="expandidos[log.id] ? 'chevron-up' : 'code'" class="w-3 h-3"></i>
+                  <span x-text="expandidos[log.id] ? 'Ocultar detalle' : 'Ver detalle completo'"></span>
+                </button>
+              </div>
+              <div x-show="expandidos[log.id] && log.detalle" x-cloak x-text="log.detalle"
+                   class="mono mt-2 p-2.5 rounded-lg text-[10.5px] leading-snug"
+                   style="background:#000; border:1px solid var(--border); color:var(--muted); white-space:pre-wrap; max-height:240px; overflow-y:auto;"></div>
+            </div>
+          </div>
+        </div>
+      </template>
+      <div x-show="logsFiltrados().length===0" class="text-center text-[12px] py-6" style="color:var(--faint);">Nada por aquí.</div>
+    </div>
+    </div>
+  </section>
+
+  <div class="text-center text-[10px] pt-2" style="color:var(--faint);" x-text="'última sincronización: ' + hace(ultimaSync)"></div>
+</main>
+
+<!-- ============ BOTÓN FLOTANTE: PREGUNTAR ============ -->
+<button @click="abrirChat()" class="fixed z-30 right-4 w-14 h-14 rounded-full flex items-center justify-center shadow-lg"
+        style="bottom: calc(env(safe-area-inset-bottom) + 20px); background:var(--wine); box-shadow:0 6px 18px rgba(156,28,46,.45);">
+  <i data-lucide="message-circle-question" class="w-6 h-6" style="color:#fff;"></i>
+</button>
+
+<!-- ============ BOTTOM SHEET: LISTA DE CONVERSIÓN (correos enviados / interesados / IG) ============ -->
+<div x-show="verListaConversion" x-cloak class="fixed inset-0 z-40" style="display:none;">
+  <div class="absolute inset-0" style="background:rgba(0,0,0,.6);" @click="verListaConversion=null"></div>
+  <div class="sheet absolute bottom-0 left-0 right-0 max-w-md mx-auto rounded-t-2xl max-h-[82vh] overflow-y-auto"
+       :class="verListaConversion ? '' : 'sheet-enter'" style="background:var(--panel); border:1px solid var(--border); padding-bottom: calc(env(safe-area-inset-bottom) + 16px);">
+    <div class="sticky top-0 px-4 pt-3 pb-3 border-b flex items-center justify-between" style="background:var(--panel); border-color:var(--border);">
+      <div class="text-[14px] font-semibold" x-text="tituloListaConversion()"></div>
+      <button @click="verListaConversion=null" class="chip w-8 h-8 flex items-center justify-center" style="background:var(--card);">
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+    <div class="px-4 py-4 space-y-2">
+      <!-- Correos enviados -->
+      <template x-if="verListaConversion==='correos_enviados'">
+        <template x-for="e in conversionDetalleActual().correos_enviados" :key="e.id">
+          <button @click="abrirCorreoEnviado(e)" class="card p-3 w-full text-left flex items-center gap-3">
+            <div class="w-10 h-10 rounded-full flex items-center justify-center font-semibold text-sm shrink-0" style="background:var(--wine-soft); color:#e3a3ab;" x-text="iniciales(e.destinatario)"></div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center justify-between">
+                <div class="text-[13px] font-medium truncate" x-text="e.destinatario"></div>
+                <div class="text-[10px] shrink-0 ml-2" style="color:var(--faint);" x-text="hace(e.hora)"></div>
+              </div>
+              <div class="text-[11px] truncate mt-0.5 font-medium" style="color:var(--muted);" x-text="e.asunto"></div>
+              <div class="text-[12px] truncate mt-0.5" style="color:var(--faint);" x-text="e.vista_previa"></div>
+            </div>
+          </button>
+        </template>
+      </template>
+      <!-- Interesados -->
+      <template x-if="verListaConversion==='interesados'">
+        <template x-for="c in conversionDetalleActual().interesados" :key="c.id">
+          <button @click="abrirCorreo(c)" class="card p-3 w-full text-left flex items-center gap-3">
+            <div class="w-10 h-10 rounded-full flex items-center justify-center font-semibold text-sm shrink-0" style="background:var(--wine-soft); color:#e3a3ab;" x-text="iniciales(c.nombre)"></div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center justify-between">
+                <div class="text-[13px] font-medium truncate" x-text="c.nombre"></div>
+                <div class="text-[10px] shrink-0 ml-2" style="color:var(--faint);" x-text="hace(c.ultima_hora)"></div>
+              </div>
+              <div class="text-[11px] truncate mt-0.5 font-medium" style="color:var(--muted);" x-text="c.asunto"></div>
+              <div class="text-[12px] truncate mt-0.5" style="color:var(--faint);" x-text="c.ultimo_mensaje"></div>
+            </div>
+            <span x-show="c.pausado" class="chip px-1.5 py-0.5 text-[9px] shrink-0" style="background:var(--warn-soft); color:#f0cf6a; border-color:transparent;">pausado</span>
+          </button>
+        </template>
+      </template>
+      <!-- Comentarios IG -->
+      <template x-if="verListaConversion==='comentarios_ig'">
+        <template x-for="p in conversionDetalleActual().comentarios_ig" :key="p.id">
+          <button @click="togglePiezaIg(p.id)" class="card p-3 w-full text-left">
+            <div class="flex items-center justify-between">
+              <div class="text-[11px] font-medium" style="color:var(--faint);" x-text="p.tipo + ' · ' + hace(p.hora)"></div>
+              <div class="flex items-center gap-2 text-[11px]" style="color:var(--muted);">
+                <span x-text="'💬 ' + p.comentarios"></span>
+                <span x-text="'❤️ ' + p.likes"></span>
+              </div>
+            </div>
+            <div class="text-[13px] mt-1.5" :class="piezaIgAbierta===p.id ? '' : 'truncate'" style="color:var(--text);" x-text="p.mensaje"></div>
+          </button>
+        </template>
+      </template>
+      <div x-show="conversionListaActualVacia()" class="text-center text-[12px] py-6" style="color:var(--faint);">Nada por aquí todavía.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ BOTTOM SHEET: CORREO ============ -->
+<div x-show="correoAbierto" x-cloak class="fixed inset-0 z-40" style="display:none;">
+  <div class="absolute inset-0" style="background:rgba(0,0,0,.6);" @click="correoAbierto=false"></div>
+  <div class="sheet absolute bottom-0 left-0 right-0 max-w-md mx-auto rounded-t-2xl max-h-[82vh] overflow-y-auto"
+       :class="correoAbierto ? '' : 'sheet-enter'" style="background:var(--panel); border:1px solid var(--border); padding-bottom: calc(env(safe-area-inset-bottom) + 16px);">
+    <div class="sticky top-0 px-4 pt-3 pb-3 border-b" style="background:var(--panel); border-color:var(--border);">
+      <div class="w-10 h-1 rounded-full mx-auto mb-3" style="background:var(--border);"></div>
+      <div class="flex items-center gap-3" x-show="correoSel">
+        <div class="w-10 h-10 rounded-full flex items-center justify-center font-semibold text-sm" style="background:var(--wine-soft); color:#e3a3ab;" x-text="correoSel ? iniciales(correoSel.nombre) : ''"></div>
+        <div class="min-w-0 flex-1">
+          <div class="text-[14px] font-semibold" x-text="correoSel?.nombre"></div>
+          <div class="text-[11px]" style="color:var(--faint);" x-text="correoSel?.email"></div>
+        </div>
+        <button @click="correoAbierto=false" class="chip w-8 h-8 flex items-center justify-center" style="background:var(--card);">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </div>
+
+    <div class="px-4 py-4 space-y-4" x-show="correoSel">
+      <div>
+        <div class="text-[11px] font-medium mb-2" style="color:var(--faint);">ASUNTO</div>
+        <div class="text-[13px] font-medium" x-text="correoSel?.asunto"></div>
+      </div>
+      <div>
+        <div class="text-[11px] font-medium mb-2" style="color:var(--faint);">RESUMEN</div>
+        <div class="card p-3 text-[13px]" style="color:var(--muted);" x-text="correoSel?.resumen"></div>
+      </div>
+      <div>
+        <div class="text-[11px] font-medium mb-2" style="color:var(--faint);">TAREAS EJECUTADAS EN ESTE LEAD</div>
+        <div class="space-y-2">
+          <template x-for="(paso, i) in (correoSel?.pasos || [])" :key="i">
+            <div class="flex items-center gap-2.5">
+              <div class="w-5 h-5 rounded-full flex items-center justify-center shrink-0" :style="'background:'+(paso.ok ? 'var(--ok-soft)' : 'var(--err-soft)')">
+                <i :data-lucide="paso.ok ? 'check' : 'x'" class="w-3 h-3" :style="'color:'+(paso.ok ? 'var(--ok)' : 'var(--err)')"></i>
+              </div>
+              <div class="text-[13px]" x-text="paso.texto"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+      <button x-show="correoSel?.lead_id" @click="pausarCorreo()" class="w-full py-3 rounded-xl text-[13px] font-semibold flex items-center justify-center gap-2"
+              :style="correoSel?.pausado ? 'background:var(--ok-soft); color:var(--ok);' : 'background:var(--err-soft); color:#ff8a7a;'">
+        <i :data-lucide="correoSel?.pausado ? 'play' : 'pause'" class="w-4 h-4"></i>
+        <span x-text="correoSel?.pausado ? 'Reactivar seguimientos a este lead' : 'Pausar seguimientos a este lead'"></span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ BOTTOM SHEET: CORREO ENVIADO (vista previa) ============ -->
+<div x-show="correoEnviadoAbierto" x-cloak class="fixed inset-0 z-40" style="display:none;">
+  <div class="absolute inset-0" style="background:rgba(0,0,0,.6);" @click="correoEnviadoAbierto=false"></div>
+  <div class="sheet absolute bottom-0 left-0 right-0 max-w-md mx-auto rounded-t-2xl max-h-[82vh] overflow-y-auto"
+       :class="correoEnviadoAbierto ? '' : 'sheet-enter'" style="background:var(--panel); border:1px solid var(--border); padding-bottom: calc(env(safe-area-inset-bottom) + 16px);">
+    <div class="sticky top-0 px-4 pt-3 pb-3 border-b" style="background:var(--panel); border-color:var(--border);">
+      <div class="w-10 h-1 rounded-full mx-auto mb-3" style="background:var(--border);"></div>
+      <div class="flex items-center gap-3" x-show="correoEnviadoSel">
+        <div class="w-10 h-10 rounded-full flex items-center justify-center font-semibold text-sm shrink-0" style="background:var(--wine-soft); color:#e3a3ab;" x-text="correoEnviadoSel ? iniciales(correoEnviadoSel.destinatario) : ''"></div>
+        <div class="min-w-0 flex-1">
+          <div class="text-[14px] font-semibold truncate" x-text="correoEnviadoSel?.asunto"></div>
+          <div class="text-[11px] truncate" style="color:var(--faint);" x-text="'Para: ' + (correoEnviadoSel?.destinatario || '')"></div>
+        </div>
+        <button @click="correoEnviadoAbierto=false" class="chip w-8 h-8 flex items-center justify-center shrink-0" style="background:var(--card);">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </div>
+    <div class="px-4 py-4 space-y-3" x-show="correoEnviadoSel">
+      <div class="text-[11px]" style="color:var(--faint);" x-text="hace(correoEnviadoSel?.hora) + (correoEnviadoSel?.nicho ? ' · ' + correoEnviadoSel.nicho : '')"></div>
+      <div class="card p-3 text-[13px] leading-relaxed" style="color:var(--text); white-space:pre-wrap;" x-text="correoEnviadoSel?.cuerpo_completo"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ BOTTOM SHEET: CHAT DIRECTO ============ -->
+<div x-show="chatAbierto" x-cloak class="fixed inset-0 z-40" style="display:none;">
+  <div class="absolute inset-0" style="background:rgba(0,0,0,.6);" @click="chatAbierto=false"></div>
+  <div class="sheet absolute bottom-0 left-0 right-0 max-w-md mx-auto rounded-t-2xl flex flex-col"
+       :class="chatAbierto ? '' : 'sheet-enter'" style="background:var(--panel); border:1px solid var(--border); height:80vh;">
+    <div class="px-4 pt-3 pb-3 border-b flex items-center gap-3" style="border-color:var(--border);">
+      <div class="w-10 h-1 rounded-full absolute left-1/2 -translate-x-1/2 top-2" style="background:var(--border);"></div>
+      <img src="assets/icono-180.png" class="w-9 h-9 rounded-lg shrink-0 mt-1" alt="El Socio">
+      <div class="min-w-0 flex-1 mt-1">
+        <div class="text-[14px] font-semibold">Pregúntale a El Socio</div>
+        <div class="text-[11px]" style="color:var(--faint);" x-text="chatConectado ? 'endpoint personalizado' : (conexion.ok ? 'conectado' : 'sin conexión')"></div>
+      </div>
+      <button @click="chatAbierto=false" class="chip w-8 h-8 flex items-center justify-center mt-1" style="background:var(--card);">
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3" x-ref="chatScroll">
+      <div x-show="mensajesChat.length===0" class="text-center text-[12px] py-8" style="color:var(--faint);">
+        Pregúntale lo que sea: leads de hoy, por qué falló algo, qué está haciendo ahora.
+      </div>
+      <template x-for="(m, i) in mensajesChat" :key="i">
+        <div class="flex" :class="m.de==='yo' ? 'justify-end' : 'justify-start'">
+          <div class="max-w-[82%] px-3 py-2 rounded-2xl text-[13px] leading-snug"
+               :style="m.de==='yo' ? 'background:var(--wine); color:#fff;' : 'background:var(--card); color:var(--text); border:1px solid var(--border);'"
+               x-text="m.texto"></div>
+        </div>
+      </template>
+      <div x-show="enviando" class="flex justify-start">
+        <div class="px-3 py-2 rounded-2xl text-[13px]" style="background:var(--card); color:var(--faint); border:1px solid var(--border);">escribiendo…</div>
+      </div>
+    </div>
+
+    <div class="px-3 pt-2 border-t flex items-center gap-2" style="border-color:var(--border); padding-bottom: calc(env(safe-area-inset-bottom) + 10px);">
+      <input x-model="preguntaInput" @keydown.enter="enviarPregunta()" type="text" placeholder="Escribe tu pregunta…"
+             class="flex-1 px-3 py-2.5 rounded-xl text-[13px]" style="background:var(--card); border:1px solid var(--border); color:var(--text);">
+      <button @click="enviarPregunta()" class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style="background:var(--wine);">
+        <i data-lucide="send" class="w-4 h-4" style="color:#fff;"></i>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL CONFIG ============ -->
+<div x-show="configAbierto" x-cloak class="fixed inset-0 z-50 flex items-end" style="display:none;">
+  <div class="absolute inset-0" style="background:rgba(0,0,0,.6);" @click="configAbierto=false"></div>
+  <div class="relative w-full max-w-md mx-auto rounded-t-2xl p-4" style="background:var(--panel); border:1px solid var(--border); padding-bottom: calc(env(safe-area-inset-bottom) + 16px);">
+    <div class="w-10 h-1 rounded-full mx-auto mb-4" style="background:var(--border);"></div>
+    <div class="text-[14px] font-semibold mb-3">Conexión de datos</div>
+    <label class="text-[11px]" style="color:var(--faint);">URL del endpoint de telemetría (JSON)</label>
+    <input x-model="endpointInput" type="text" placeholder="https://tu-n8n.com/webhook/el-socio/estado"
+           class="w-full mt-1 mb-3 px-3 py-2.5 rounded-xl text-[13px]" style="background:var(--card); border:1px solid var(--border); color:var(--text);">
+    <label class="text-[11px]" style="color:var(--faint);">URL del chat directo (opcional)</label>
+    <input x-model="chatEndpointInput" type="text" placeholder="https://tu-n8n.com/webhook/el-socio/preguntar"
+           class="w-full mt-1 mb-3 px-3 py-2.5 rounded-xl text-[13px]" style="background:var(--card); border:1px solid var(--border); color:var(--text);">
+    <div class="flex gap-2">
+      <button @click="usarPorDefecto()" class="flex-1 py-2.5 rounded-xl text-[13px] font-medium" style="background:var(--card); color:var(--muted);">Usar servidor local</button>
+      <button @click="guardarEndpoint()" class="flex-1 py-2.5 rounded-xl text-[13px] font-semibold" style="background:var(--wine); color:#fff;">Conectar</button>
+    </div>
+    <div class="text-[11px] mt-3 leading-relaxed" style="color:var(--faint);">
+      Debe devolver JSON con la forma de <span class="mono">state</span> (ver comentario en el código fuente, función <span class="mono">fetchAgentData()</span>). El chat espera POST con <span class="mono">{"pregunta": "..."}</span> y responde <span class="mono">{"respuesta": "..."}</span> (calza con la acción <span class="mono">preguntar</span> de <span class="mono">panel_server.py</span>). Reintenta cada 15s. Sin HTTPS válido no conecta en iOS/Android instalado como app.
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================================
+   MÓDULO DE DATOS — contrato de la API
+   ----------------------------------------------------------------------------
+   Por defecto esta página pide los datos a RUTAS RELATIVAS: '/api/estado',
+   '/api/preguntar' y '/api/accion'. Eso funciona solo si abres este archivo
+   servido por `scripts/panel_server.py` (puerto 8787) — ahí esas rutas ya
+   existen y devuelven datos 100% reales de `data/el_socio.db` (ver
+   `scripts/panel_api.py`). Si la abres suelta (file://) o desde otro
+   servidor sin esas rutas, queda en "Sin conexión" — nunca inventa datos.
+
+   Si quieres apuntar a otro backend (n8n, Supabase, etc.), usa el botón ⚡
+   para pegar una URL — queda guardada en localStorage de este celular.
+
+   Esta página NUNCA inventa datos: si no hay conexión, se muestra "Sin
+   conexión" y los números quedan en "—". No existe modo demo.
+
+   El endpoint debe responder JSON con esta forma exacta:
+   {
+     "estado": {
+       "color": "verde" | "amarillo" | "rojo",
+       "etiqueta": "Ejecutando" | "Esperando tu revisión" | "En error",
+       "accion_actual": "texto libre de qué está haciendo ahora",
+       "actualizado": "2026-11-25T14:32:00"   // ISO 8601, hora local
+     },
+     "metricas": {
+       "tareas_ok": 142, "tareas_fail": 3,
+       "chats_activos": 7, "leads_hoy": 5,
+       "seguimientos_pendientes": 4,
+       "gasto_ia_hoy_usd": 0.18, "gasto_ia_tope_usd": 0.50
+     },
+     "logs": [
+       { "id": "l1", "tipo": "exito"|"fallo"|"alerta", "mensaje": "etiqueta corta y limpia",
+         "detalle": "resultado/error crudo completo (JSON, ids, etc.) — se muestra solo si tocas 'Ver detalle completo'",
+         "content_id": 104 | null, // si existe, 'Reintentar' llama de verdad a /api/accion reintentar_ig
+         "contacto": "Carlos Restrepo", "hora": "ISO 8601" }
+     ],
+     "conversion": {
+       "hoy":  { "correos_enviados": 11, "interesados": 0, "comentarios_ig": 0 },
+       "ayer": { "correos_enviados": 15, "interesados": 1, "comentarios_ig": 3 }
+     },
+     "conversion_detalle": {
+       "hoy": {
+         "correos_enviados": [
+           { "id": 26, "destinatario": "contacto@ejemplo.com", "asunto": "fotos Dermavive",
+             "vista_previa": "primeros 200 caracteres del correo real...",
+             "cuerpo_completo": "el correo completo tal cual se mandó por SMTP",
+             "nicho": "fichas-ropa", "hora": "ISO 8601" }
+         ],
+         "interesados": [
+           { "id": "e1", "lead_id": 104, "nombre": "Carlos Restrepo", "email": "carlos@ejemplo.com",
+             "asunto": "Re: Cotización modelado 3D",
+             "ultimo_mensaje": "...", "ultima_hora": "ISO 8601",
+             "pausado": false, "resumen": "texto libre",
+             "pasos": [ { "texto": "Calificó lead", "ok": true }, ... ] }
+         ],
+         "comentarios_ig": [
+           { "id": 1, "tipo": "video", "mensaje": "gancho + caption real de la pieza",
+             "comentarios": 3, "likes": 12, "hora": "ISO 8601" }
+         ]
+       },
+       "ayer": { "correos_enviados": [...], "interesados": [...], "comentarios_ig": [...] }
+     }
+   }
+
+   "conversion" se reinicia cada jornada (es del día, no del mes) — el relojito 🕐 en la
+   tarjeta de Conversión alterna entre "hoy" y "ayer"; solo se guarda ese historial de 1 día,
+   nada más atrás.
+
+   Nota honesta: no hay "cotizado/vendido en COP" en el contrato porque hoy
+   `el_socio.db` no registra plata real de ventas — solo etapas de lead. Si
+   algún día se agrega esa tabla, se suma aquí sin inventar nada mientras tanto.
+
+   Reintentos: cada 15s por polling. Si luego quieres WebSocket real-time,
+   cambia el cuerpo de fetchAgentData() por un listener de socket.
+   ============================================================================ */
+
+async function fetchAgentData(){
+  const override = localStorage.getItem('elsocio_endpoint');
+  const url = override || '/api/estado';
+  try {
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.json();
+  } catch (e) {
+    console.warn('fetchAgentData falló:', e);
+    return null; // sin conexión: nunca se inventan datos, la UI queda en "Sin conexión"
+  }
+}
+
+async function preguntarAgente(pregunta){
+  const override = localStorage.getItem('elsocio_chat_endpoint');
+  const url = override || '/api/preguntar';
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pregunta })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    return data.respuesta || '(sin respuesta)';
+  } catch (e) {
+    console.warn('preguntarAgente falló:', e);
+    return 'No pude conectarme al servidor real de El Socio. Revisa que panel_server.py esté corriendo y la URL en ⚡.';
+  }
+}
+
+async function enviarAccion(accion, extra){
+  const override = localStorage.getItem('elsocio_accion_endpoint');
+  const url = override || '/api/accion';
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accion, ...extra })
+    });
+    return res.ok;
+  } catch (e) {
+    console.warn('enviarAccion falló (sin conexión al servidor real):', e);
+    return false;
+  }
+}
+
+// Igual que enviarAccion(), pero devuelve el JSON real de la respuesta (ok/error/datos) en
+// vez de solo true/false — para acciones donde necesitas saber *por qué* falló de verdad.
+async function enviarAccionConResultado(accion, extra){
+  const override = localStorage.getItem('elsocio_accion_endpoint');
+  const url = override || '/api/accion';
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accion, ...extra })
+    });
+    return await res.json();
+  } catch (e) {
+    console.warn('enviarAccionConResultado falló (sin conexión al servidor real):', e);
+    return null;
+  }
+}
+
+function app(){
+  return {
+    endpointInput: '',
+    chatEndpointInput: '',
+    chatConectado: false,
+    chatAbierto: false,
+    mensajesChat: [],
+    preguntaInput: '',
+    enviando: false,
+    conexion: { ok:false },
+    estado: { color:'amarillo', etiqueta:'—', accion_actual:'Cargando…', actualizado: new Date().toISOString() },
+    metricas: { tareas_ok:0, tareas_fail:0, chats_activos:0, leads_hoy:0, seguimientos_pendientes:0 },
+    diaConversion: 'hoy',
+    conversion: { hoy: { correos_enviados:0, interesados:0, comentarios_ig:0 }, ayer: { correos_enviados:0, interesados:0, comentarios_ig:0 } },
+    conversionDetalle: { hoy: { correos_enviados:[], interesados:[], comentarios_ig:[] }, ayer: { correos_enviados:[], interesados:[], comentarios_ig:[] } },
+    verListaConversion: null,
+    piezaIgAbierta: null,
+    logs: [],
+    correoEnviadoAbierto: false, correoEnviadoSel: null,
+    expandidos: {}, reintentando: null,
+    filtroLog: 'todas',
+    logsAbierto: false,
+    cargando: false, ultimaSync: new Date().toISOString(),
+    correoAbierto: false, correoSel: null,
+    configAbierto: false,
+    _timer: null,
+
+    init(){
+      this.logsAbierto = localStorage.getItem('elsocio_logs_abierto') === '1';
+      this.endpointInput = localStorage.getItem('elsocio_endpoint') || '';
+      this.chatEndpointInput = localStorage.getItem('elsocio_chat_endpoint') || '';
+      this.chatConectado = !!this.chatEndpointInput;
+      this.cargar();
+      this._timer = setInterval(() => this.cargar(), 15000);
+      this.$nextTick(() => lucide.createIcons());
+      this.$watch('logs', () => this.$nextTick(() => lucide.createIcons()));
+      this.$watch('conversionDetalle', () => this.$nextTick(() => lucide.createIcons()));
+      this.$watch('verListaConversion', () => this.$nextTick(() => lucide.createIcons()));
+      this.$watch('diaConversion', () => this.$nextTick(() => lucide.createIcons()));
+      this.$watch('correoAbierto', () => this.$nextTick(() => lucide.createIcons()));
+      this.$watch('correoEnviadoAbierto', () => this.$nextTick(() => lucide.createIcons()));
+      this.$watch('configAbierto', () => this.$nextTick(() => lucide.createIcons()));
+      this.$watch('chatAbierto', () => this.$nextTick(() => lucide.createIcons()));
+      this.$watch('mensajesChat', () => this.$nextTick(() => lucide.createIcons()));
+    },
+
+    async cargar(){
+      this.cargando = true;
+      const datos = await fetchAgentData();
+      if (datos){
+        this.estado = datos.estado || this.estado;
+        this.metricas = datos.metricas || this.metricas;
+        this.logs = datos.logs || this.logs;
+        this.conversion = datos.conversion || this.conversion;
+        this.conversionDetalle = datos.conversion_detalle || this.conversionDetalle;
+        this.conexion.ok = true;
+      } else {
+        this.conexion.ok = false;
+        this.estado = { color:'rojo', etiqueta:'Sin conexión', accion_actual:'No se pudo conectar al servidor real de El Socio (panel_server.py).', actualizado: this.estado.actualizado };
+      }
+      this.ultimaSync = new Date().toISOString();
+      this.cargando = false;
+    },
+
+    abrirConfig(){ this.configAbierto = true; },
+    usarPorDefecto(){
+      localStorage.removeItem('elsocio_endpoint');
+      localStorage.removeItem('elsocio_chat_endpoint');
+      this.endpointInput = '';
+      this.chatEndpointInput = '';
+      this.chatConectado = false;
+      this.configAbierto = false;
+      this.cargar();
+    },
+    guardarEndpoint(){
+      const v = this.endpointInput.trim();
+      const vc = this.chatEndpointInput.trim();
+      if (!v) { localStorage.removeItem('elsocio_endpoint'); }
+      else { localStorage.setItem('elsocio_endpoint', v); }
+      if (!vc) { localStorage.removeItem('elsocio_chat_endpoint'); this.chatConectado = false; }
+      else { localStorage.setItem('elsocio_chat_endpoint', vc); this.chatConectado = true; }
+      this.configAbierto = false;
+      this.cargar();
+    },
+
+    abrirChat(){ this.chatAbierto = true; },
+    async enviarPregunta(){
+      const texto = this.preguntaInput.trim();
+      if (!texto || this.enviando) return;
+      this.mensajesChat.push({ de:'yo', texto });
+      this.preguntaInput = '';
+      this.enviando = true;
+      this.scrollChatAbajo();
+      const respuesta = await preguntarAgente(texto);
+      this.mensajesChat.push({ de:'socio', texto: respuesta });
+      this.enviando = false;
+      this.$nextTick(() => this.scrollChatAbajo());
+    },
+    scrollChatAbajo(){
+      this.$nextTick(() => {
+        const el = this.$refs.chatScroll;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
+
+    tasaExito(){
+      const t = this.metricas.tareas_ok + this.metricas.tareas_fail;
+      return t === 0 ? '100' : ((this.metricas.tareas_ok / t) * 100).toFixed(1);
+    },
+    formatoGastoIA(){
+      const g = this.metricas.gasto_ia_hoy_usd, t = this.metricas.gasto_ia_tope_usd;
+      if (g === undefined || g === null) return '—';
+      return '$' + g.toFixed(3) + (t ? ' / $' + t.toFixed(2) : '');
+    },
+    hace(iso){
+      if (!iso) return '—';
+      const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime())/1000));
+      if (s < 60) return 'segundos';
+      const m = Math.floor(s/60);
+      if (m < 60) return m + ' min';
+      const h = Math.floor(m/60);
+      if (h < 24) return h + ' h';
+      return Math.floor(h/24) + ' d';
+    },
+    iniciales(nombre){
+      if (!nombre) return '?';
+      return nombre.split(' ').slice(0,2).map(p=>p[0]).join('').toUpperCase();
+    },
+
+    estadoColorHex(c){ return c==='verde' ? '#3fae6a' : c==='amarillo' ? '#d4a62a' : '#c0392b'; },
+    estadoSoftHex(c){ return c==='verde' ? 'rgba(63,174,106,.10)' : c==='amarillo' ? 'rgba(212,166,42,.10)' : 'rgba(192,57,43,.12)'; },
+
+    logIcono(tipo){ return tipo==='exito' ? 'check-circle-2' : tipo==='alerta' ? 'alert-triangle' : 'x-circle'; },
+    logColor(tipo){ return tipo==='exito' ? 'var(--ok)' : tipo==='alerta' ? 'var(--warn)' : 'var(--err)'; },
+    logSoft(tipo){ return tipo==='exito' ? 'var(--ok-soft)' : tipo==='alerta' ? 'var(--warn-soft)' : 'var(--err-soft)'; },
+
+    logsFiltrados(){
+      if (this.filtroLog === 'fallidas') return this.logs.filter(l => l.tipo === 'fallo' || l.tipo === 'alerta');
+      if (this.filtroLog === 'ventas') return this.logs.filter(l => /cita|cierre|vendid|anticipo|agendad/i.test(l.mensaje));
+      return this.logs;
+    },
+
+    async reintentar(log){
+      if (!log.content_id || this.reintentando) return;
+      this.reintentando = log.id;
+      const res = await enviarAccionConResultado('reintentar_ig', { content_id: log.content_id });
+      this.reintentando = null;
+      if (!res) { alert('No se pudo conectar al servidor real. Revisa la conexión.'); return; }
+      if (res.ok) {
+        alert('Reintentado con éxito: se publicó en Instagram (ig_media_id ' + res.ig_media_id + ').');
+        this.cargar();
+      } else {
+        alert('Instagram volvió a rechazarlo:\n\n' + (res.error || 'error desconocido') +
+              '\n\nSi dice algo como "cuenta restringida", el código no lo puede arreglar solo: hay que resolverlo en Meta Business Suite.');
+      }
+    },
+    tomarControl(log){ alert('Tomando control de la conversación con ' + (log.contacto || 'el contacto') + '\n\n(conecta a tu endpoint real para pausar el bot)'); },
+    toggleDetalle(id){
+      this.expandidos[id] = !this.expandidos[id];
+      this.$nextTick(() => lucide.createIcons());
+    },
+
+    // El registro arranca cerrado para no comerse la pantalla del celular; la eleccion se
+    // recuerda en ESTE telefono. Lucide reemplaza los <i data-lucide> por SVG al pintar, asi
+    // que al desplegar hay que volver a pintarlos o los iconos salen en blanco.
+    alternarLogs(){
+      this.logsAbierto = !this.logsAbierto;
+      try { localStorage.setItem('elsocio_logs_abierto', this.logsAbierto ? '1' : '0'); } catch (e) {}
+      this.$nextTick(() => lucide.createIcons());
+    },
+
+    abrirCorreo(c){ this.correoSel = c; this.correoAbierto = true; },
+    abrirCorreoEnviado(e){ this.correoEnviadoSel = e; this.correoEnviadoAbierto = true; },
+    async pausarCorreo(){
+      if (!this.correoSel || !this.correoSel.lead_id) return;
+      const nuevoPausado = !this.correoSel.pausado;
+      this.correoSel.pausado = nuevoPausado; // optimista
+      const ref = this.conversionDetalleActual().interesados.find(c => c.id === this.correoSel.id);
+      if (ref) ref.pausado = nuevoPausado;
+      const ok = await enviarAccion(nuevoPausado ? 'pausar_lead' : 'reactivar_lead', { lead_id: this.correoSel.lead_id });
+      if (!ok) {
+        // Falló contra el servidor real: revertimos el cambio visual, nunca se finge éxito.
+        this.correoSel.pausado = !nuevoPausado;
+        if (ref) ref.pausado = !nuevoPausado;
+      }
+    },
+
+    conversionActual(){ return this.conversion[this.diaConversion] || { correos_enviados:0, interesados:0, comentarios_ig:0 }; },
+    conversionDetalleActual(){ return this.conversionDetalle[this.diaConversion] || { correos_enviados:[], interesados:[], comentarios_ig:[] }; },
+    tituloListaConversion(){
+      const etiquetas = { correos_enviados:'Correos enviados', interesados:'Interesados', comentarios_ig:'Comentarios en Instagram' };
+      const sufijo = this.diaConversion === 'hoy' ? 'hoy' : 'ayer';
+      return (etiquetas[this.verListaConversion] || '') + ' · ' + sufijo;
+    },
+    conversionListaActualVacia(){
+      const d = this.conversionDetalleActual();
+      const k = this.verListaConversion;
+      return !!k && Array.isArray(d[k]) && d[k].length === 0;
+    },
+    togglePiezaIg(id){ this.piezaIgAbierta = this.piezaIgAbierta === id ? null : id; }
+  };
+}
+</script>
+</body>
+</html>
