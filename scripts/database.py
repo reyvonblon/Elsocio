@@ -57,6 +57,33 @@ CREATE TABLE IF NOT EXISTS agent_followups (
     estado TEXT DEFAULT 'pendiente', created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_agent_followups_estado ON agent_followups(estado, programado_para);
+CREATE TABLE IF NOT EXISTS content_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pieza_id INTEGER NOT NULL,
+    ventana TEXT NOT NULL,              -- '24h' | '7d'
+    alcance INTEGER DEFAULT 0,
+    vistas INTEGER DEFAULT 0,
+    guardados INTEGER DEFAULT 0,
+    compartidos INTEGER DEFAULT 0,
+    comentarios_reales INTEGER DEFAULT 0,
+    comentarios_emoji INTEGER DEFAULT 0,
+    likes INTEGER DEFAULT 0,
+    watch_time_ms INTEGER DEFAULT 0,
+    duracion_s REAL DEFAULT 0.0,
+    retencion_pct REAL,                 -- NULL = no se pudo calcular (sin duracion del archivo)
+    capturado_en TEXT,
+    UNIQUE (pieza_id, ventana)
+);
+CREATE INDEX IF NOT EXISTS idx_content_metrics_pieza ON content_metrics(pieza_id, ventana);
+-- Las visitas al perfil NO existen por pieza en Graph API: son metrica de cuenta y por dia.
+-- Se guardan aparte para no inventar una atribucion que Meta no da.
+CREATE TABLE IF NOT EXISTS account_metrics (
+    fecha TEXT PRIMARY KEY,
+    alcance INTEGER DEFAULT 0,
+    visitas_perfil INTEGER DEFAULT 0,
+    seguidores INTEGER DEFAULT 0,
+    capturado_en TEXT
+);
 CREATE TABLE IF NOT EXISTS content_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tipo TEXT NOT NULL DEFAULT 'post',
@@ -870,6 +897,103 @@ def update_content(
     with _conn() as conn:
         conn.execute(f"UPDATE content_queue SET {', '.join(campos)} WHERE id=?", valores)
     return get_content(content_id)
+
+
+# ------------------------------------------------------------------ metricas de contenido
+# Tabla aparte de `content_queue` a proposito: las metricas son serie de tiempo (24h y 7d).
+# Sobrescribir `likes_ig` pierde la curva, que es donde esta la informacion.
+# Diseno completo en `contexto/ciclo-insights.md`.
+
+VENTANAS_METRICAS = ("24h", "7d")
+
+
+def guardar_metricas(
+    pieza_id: int, ventana: str, *, alcance: int = 0, vistas: int = 0, guardados: int = 0,
+    compartidos: int = 0, comentarios_reales: int = 0, comentarios_emoji: int = 0,
+    likes: int = 0, watch_time_ms: int = 0, duracion_s: float = 0.0,
+) -> dict:
+    """Guarda (o reemplaza) la captura de una pieza en una ventana."""
+    if ventana not in VENTANAS_METRICAS:
+        raise ValueError(f"ventana invalida: {ventana!r}")
+    retencion = None
+    if duracion_s and watch_time_ms:
+        retencion = round((watch_time_ms / 1000.0) / float(duracion_s) * 100.0, 2)
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO content_metrics (pieza_id, ventana, alcance, vistas, guardados, "
+            "compartidos, comentarios_reales, comentarios_emoji, likes, watch_time_ms, "
+            "duracion_s, retencion_pct, capturado_en) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(pieza_id, ventana) DO UPDATE SET "
+            "alcance=excluded.alcance, vistas=excluded.vistas, guardados=excluded.guardados, "
+            "compartidos=excluded.compartidos, comentarios_reales=excluded.comentarios_reales, "
+            "comentarios_emoji=excluded.comentarios_emoji, likes=excluded.likes, "
+            "watch_time_ms=excluded.watch_time_ms, duracion_s=excluded.duracion_s, "
+            "retencion_pct=excluded.retencion_pct, capturado_en=excluded.capturado_en",
+            (int(pieza_id), ventana, int(alcance), int(vistas), int(guardados), int(compartidos),
+             int(comentarios_reales), int(comentarios_emoji), int(likes), int(watch_time_ms),
+             float(duracion_s), retencion, _now()),
+        )
+    return metricas_de(pieza_id, ventana) or {}
+
+
+def metricas_de(pieza_id: int, ventana: str = "") -> dict | list[dict] | None:
+    with _conn() as conn:
+        if ventana:
+            row = conn.execute(
+                "SELECT * FROM content_metrics WHERE pieza_id=? AND ventana=?",
+                (int(pieza_id), ventana),
+            ).fetchone()
+            return dict(row) if row else None
+        rows = conn.execute(
+            "SELECT * FROM content_metrics WHERE pieza_id=? ORDER BY ventana",
+            (int(pieza_id),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def reels_por_capturar(ventana: str, *, horas_minimas: float) -> list[dict]:
+    """Reels publicados hace mas de `horas_minimas` que aun no tienen esa ventana capturada.
+
+    Solo `tipo='video'`: la historia muere a las 24 h y en cuenta nueva no tiene muestra, asi que
+    no vota en las decisiones del motor (`contexto/ciclo-insights.md` §2).
+    """
+    if ventana not in VENTANAS_METRICAS:
+        raise ValueError(f"ventana invalida: {ventana!r}")
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT c.* FROM content_queue c "
+            "LEFT JOIN content_metrics m ON m.pieza_id = c.id AND m.ventana = ? "
+            "WHERE c.tipo = 'video' AND c.estado = 'publicado' "
+            "  AND IFNULL(c.ig_media_id,'') <> '' AND c.published_at IS NOT NULL "
+            "  AND m.id IS NULL "
+            "  AND (julianday('now') - julianday(c.published_at)) * 24.0 >= ? "
+            "ORDER BY c.published_at",
+            (ventana, float(horas_minimas)),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def guardar_metricas_cuenta(
+    fecha: str, *, alcance: int = 0, visitas_perfil: int = 0, seguidores: int = 0,
+) -> None:
+    """Metricas de CUENTA por dia. Las visitas al perfil no existen por pieza en Graph API."""
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO account_metrics (fecha, alcance, visitas_perfil, seguidores, capturado_en) "
+            "VALUES (?,?,?,?,?) ON CONFLICT(fecha) DO UPDATE SET "
+            "alcance=excluded.alcance, visitas_perfil=excluded.visitas_perfil, "
+            "seguidores=excluded.seguidores, capturado_en=excluded.capturado_en",
+            (fecha, int(alcance), int(visitas_perfil), int(seguidores), _now()),
+        )
+
+
+def metricas_cuenta(limite: int = 30) -> list[dict]:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM account_metrics ORDER BY fecha DESC LIMIT ?", (int(limite),)
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def count_content_by_estado() -> dict[str, int]:

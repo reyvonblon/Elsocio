@@ -405,7 +405,7 @@ class TestCerebroContenido(BaseAutonoma):
         cfg = dict(self.CFG, CONTENT_MAX_DAILY_PIECES="2")
         r1 = self._respuesta_pieza(formato="collage")
         r2 = self._respuesta_pieza(
-            nicho="modelado-3d-espacios",
+            nicho="modelado-3d-espacios", escena="flujo",
             gancho="Uno de estos locales va a romper la pared equivocada.", formato="collage",
         )
         with mock.patch.object(sales_agent, "llamar_api", side_effect=[r1, r2]):
@@ -424,7 +424,7 @@ class TestCerebroContenido(BaseAutonoma):
         # Subimos cuota a 2 para probar filtro anti-repetición.
         cfg = dict(self.CFG, CONTENT_MAX_DAILY_PIECES="2")
         r1 = self._respuesta_pieza(gancho=repetido)
-        r2 = self._respuesta_pieza(gancho="Construir tu local sin render es firmar a ciegas.")
+        r2 = self._respuesta_pieza(gancho="Construir tu local sin render es firmar a ciegas.", escena="flujo")
         with mock.patch.object(sales_agent, "llamar_api", side_effect=[r1, r2]):
             res = content_brain.CerebroContenido(cfg).crear_pieza_del_dia(renderizar=False)
         self.assertTrue(res["creada"], res)
@@ -752,7 +752,7 @@ class TestMixDiarioStoriesYReservaVentas(BaseAutonoma):
                 ],
                 "cierre": "Cuéntanos tu problema · link en bio",
                 "caption": "Producción textil clara desde el inicio.",
-                "escena": "contraste",
+                "escena": "agenda",
                 "etiquetas": ["POR AUDIO", "PLANO CLARO", "EXACTO"],
             },
             {

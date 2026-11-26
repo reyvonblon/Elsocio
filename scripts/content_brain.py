@@ -354,9 +354,21 @@ def construir_system_prompt_contenido() -> str:
         "(no para la voz): el error común con un objeto concreto, lo que le cuesta al dueño, el giro, cómo "
         "lo resolvemos paso a paso y cómo queda. `cierre` = invitación corta a escribir por mensaje directo "
         "con su caso. Sin numerar láminas con dígitos (eso lo pone el diseño).\n"
+        "- CLARIDAD PARA CUALQUIERA (sin excepción, en Reels/Historias/Carruseles/Posts): el motor usa "
+        "palabras genéricas compartidas entre nichos como código interno de escena ('taller', 'estudio', "
+        "'sesión', 'local', 'obra', 'oficina'). Quien ve la pieza no conoce ese código ni el nicho: la "
+        "PRIMERA vez que el gancho o un bloque use una de esas palabras, tiene que ir pegada en la MISMA "
+        "frase al sustantivo concreto que la hace entendible para cualquiera, hasta un niño ('sesión de "
+        "fotos de tu producto', 'estudio fotográfico', 'taller de costura', 'obra de remodelación'). "
+        "Nunca dejes 'la sesión', 'el taller' o 'el estudio' sueltos sin decir de qué son: si alguien que "
+        "nunca oyó hablar del nicho se pregunta '¿sesión de qué?' o '¿cuál taller?', la pieza está mal "
+        "escrita. Esto es más importante que sonar elegante o breve.\n"
         "- GANCHO de Reel: tensión en el primer segundo, con algo que se pierde ('Uno de estos dos talleres "
         "te va a arruinar la colección.', 'Uno de estos locales va a romper una pared de más.'). Nada de "
         "presentaciones ni preguntas tibias.\n"
+        "- INTERACCIÓN MERECIDA, NO PEDIDA (la guarda en código rechaza la pieza completa si la pides): PROHIBIDO pedir comentario, like, guardado, compartido, seguimiento o 'link en bio' con cualquier palabra: 'comenta', 'dime abajo', 'dale like', 'pon un corazón', 'etiqueta a', 'comparte esto', 'guarda este', 'sígueme', 'activa las notificaciones'. Pedirlo sube el contador hoy y quema la credibilidad que es justo lo que estamos vendiendo. Para que la gente comente SIN que se lo pidas, todo Reel usa al menos uno de estos tres mecanismos:\n  1. DEJAR ALGO SIN CERRAR que el espectador quiera resolver: nombra el error pero no todo el remedio, o muestra el lado B sin decir el paso exacto que lo logró.\n  2. AFIRMAR ALGO DISCUTIBLE con lo que una parte del público no esté de acuerdo (una verdad incómoda del oficio que la mitad defiende y la mitad niega). Nada tibio: lo tibio no se comenta.\n  3. NOMBRAR UNA EXPERIENCIA ESPECÍFICA Y RECONOCIBLE que el espectador quiera completar con la suya (el detalle exacto que solo conoce quien lo vivió: el audio de voz a las once de la noche, la tela cortada al revés, el cliente que pide el cambio el viernes).\n"
+        "- MOTIVO PARA GUARDAR (obligatorio en Reel y Carrusel): la pieza tiene que dejar algo APLICABLE que alguien quiera volver a ver — la secuencia de pasos del lado B, la señal temprana para detectar el problema, el criterio para decidir. Si la pieza solo describe un dolor sin dejar nada que el espectador pueda usar, NO sirve: el guardado es la métrica que el motor optimiza y una pieza sin motivo para guardarse nace con esa métrica en cero.\n"
+        "- LA EXCEPCIÓN: invitar a escribir por mensaje directo con su caso SÍ se permite y se espera en Historias y Carruseles. Eso no es pedir interacción, es el paso de venta. La diferencia: pedir un like infla un contador, invitar a que te cuenten su caso abre una conversación que se puede cerrar.\n"
         "- CIERRE de Reel: venta, no despedida. Lo arma el código: 'No seas el Taller A. Sé el Taller B. "
         "Con El Socio, te lo solucionamos.' Por eso el lado A y el lado B tienen que quedar clarísimos en los bloques.\n"
         "- FORMATO de Reel (`formato`): 'mundo' para contar un lugar, 'collage' para explicar un proceso paso a "
@@ -416,6 +428,7 @@ def construir_contexto_creativo(*, tipo_forzado: str = "", formatos_lote: list[s
     senales = database.list_recent_market_signals(limit=10) if database.DB_PATH.exists() else {"landing": [], "respuestas": []}
     ganchos_usados = database.list_recent_hooks(limit=45) if database.DB_PATH.exists() else []
     nichos_video_bloqueados = database.list_recent_video_nichos(dias=DIAS_SIN_REPETIR_TEMA_VIDEO) if database.DB_PATH.exists() else set()
+    escenas_usadas_hoy = content_manager.escenas_usadas_hoy() if database.DB_PATH.exists() else set()
 
     if formatos_lote:
         encabezado = (
@@ -453,6 +466,13 @@ def construir_contexto_creativo(*, tipo_forzado: str = "", formatos_lote: list[s
     if formatos_lote and sum(1 for t in formatos_lote if t == "video") > 1:
         partes.append(
             "Si hoy hay más de un REEL en el plan, cada REEL tiene que ir de un `nicho` distinto entre sí."
+        )
+    escenas_libres = [e for e in content_manager.ESCENAS if e not in escenas_usadas_hoy]
+    if escenas_usadas_hoy and escenas_libres:
+        partes.append(
+            f"PROHIBIDO repetir `escena` entre piezas de hoy (cualquier tipo): ya se usaron "
+            f"{', '.join(sorted(escenas_usadas_hoy))}. Usa solo de las que quedan libres: "
+            + ", ".join(escenas_libres)
         )
 
     if formatos_lote:
@@ -641,6 +661,7 @@ class CerebroContenido:
         mensajes: list[dict] = [{"role": "user", "content": contexto}]
         ganchos_previos = {g.lower().strip() for g in database.list_recent_hooks(limit=60)}
         nichos_video_bloqueados = database.list_recent_video_nichos(dias=DIAS_SIN_REPETIR_TEMA_VIDEO)
+        escenas_usadas_hoy = content_manager.escenas_usadas_hoy()
         propuesta_valida: dict | None = None
         ultimo_error = "sin_propuesta"
 
@@ -682,6 +703,7 @@ class CerebroContenido:
             datos = bloque.get("input") or {}
             ok_pieza, detalle_o_limpia = self._validar_propuesta(
                 datos, ganchos_previos, nichos_video_bloqueados=nichos_video_bloqueados,
+                escenas_usadas_hoy=escenas_usadas_hoy,
             )
             if ok_pieza and isinstance(detalle_o_limpia, dict):
                 propuesta_valida = detalle_o_limpia
@@ -792,6 +814,7 @@ class CerebroContenido:
         # Crece también dentro de este mismo lote: 2 reels del mismo día no pueden compartir nicho,
         # pero un post/historia/carrusel sí puede reforzar el nicho de un reel del día (no se le suma aquí).
         nichos_video_bloqueados = database.list_recent_video_nichos(dias=DIAS_SIN_REPETIR_TEMA_VIDEO)
+        escenas_usadas_hoy = content_manager.escenas_usadas_hoy()
 
         aceptadas: list[dict] = []
         pendientes_pedir = list(faltantes)
@@ -843,6 +866,7 @@ class CerebroContenido:
                     break
                 ok_p, det = self._validar_propuesta(
                     item or {}, ganchos_previos, nichos_video_bloqueados=nichos_video_bloqueados,
+                    escenas_usadas_hoy=escenas_usadas_hoy,
                 )
                 if not ok_p or not isinstance(det, dict):
                     errores_lote.append(f"pieza {idx_p + 1}: {det}")
@@ -852,6 +876,7 @@ class CerebroContenido:
                     continue
                 restantes_por_tipo[t_pieza] -= 1
                 ganchos_previos.add(det["gancho"].lower().strip())
+                escenas_usadas_hoy.add(det["escena"])
                 if t_pieza == "video":
                     nichos_video_bloqueados.add(det["nicho"].lower().strip())
                 aceptadas.append(det)
@@ -910,6 +935,7 @@ class CerebroContenido:
     def _validar_propuesta(
         self, datos: dict, ganchos_previos: set[str], *,
         nichos_video_bloqueados: set[str] | None = None,
+        escenas_usadas_hoy: set[str] | None = None,
     ) -> tuple[bool, dict | str]:
         tipo = str(datos.get("tipo") or "video").strip().lower()
         if tipo not in database.CONTENT_TIPOS:
@@ -950,6 +976,12 @@ class CerebroContenido:
             )
         except ValueError as exc:
             return False, str(exc)
+
+        usadas_hoy = escenas_usadas_hoy or set()
+        # Si ya se usaron las 4 escenas hoy no hay de otra: se deja repetir en vez de trabar el día.
+        if escena in usadas_hoy and len(usadas_hoy) < len(content_manager.ESCENAS):
+            return False, (f"escena visual repetida: '{escena}' ya se usó hoy en otra pieza "
+                            f"(quedan libres: {', '.join(e for e in content_manager.ESCENAS if e not in usadas_hoy)})")
 
         planos = content_manager.normalizar_planos(datos.get("planos") or []) if tipo == "video" else []
 
