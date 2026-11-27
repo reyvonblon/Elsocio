@@ -91,6 +91,11 @@ TODOS_LOS_FOCOS = frozenset(f for lista in FOCOS.values() for f in lista)
 # Formatos de Reel (cada uno aprendido de una referencia, ver `contexto/guia-estilo-video.md` §6, §10, §11).
 # Todos usan la misma voz, la misma línea de tiempo y el mismo cierre de venta; cambia lo que se ve.
 FORMATOS = ("mundo", "collage", "duelo")
+# Formatos que entran en la rotación automática. `duelo` sigue existiendo y se puede pedir a mano
+# (`--formato duelo`), pero está fuera hasta rediseñarlo: sus dos paneles se ven vacíos en dos
+# tercios y en el gancho el lado bueno sale rotulado "DEVUELTO" igual que el malo. Con uno de cada
+# tres reels saliendo así, el piso de calidad del feed lo marcaba él. Para devolverlo: añadirlo aquí.
+FORMATOS_EN_ROTACION = ("mundo", "collage")
 # Objetos-metáfora del formato collage (`redes/video-logo/src/ReelCollage.tsx`).
 OBJETOS_COLLAGE = (
     "iman", "pecera", "diana", "clasificadora", "tostadora", "embudo", "agenda", "reloj", "papeles",
@@ -246,11 +251,11 @@ def elegir_formato(sugerido: str = "", recientes: list[str] | None = None) -> st
     recientes = formatos_recientes() if recientes is None else recientes
     ultimo = recientes[0] if recientes else ""
     sugerido = (sugerido or "").strip().lower()
-    if sugerido in FORMATOS and sugerido != ultimo:
+    if sugerido in FORMATOS_EN_ROTACION and sugerido != ultimo:
         return sugerido
-    ventana = recientes[: len(FORMATOS) * 2]
-    candidatos = [f for f in FORMATOS if f != ultimo] or list(FORMATOS)
-    return min(candidatos, key=lambda f: (ventana.count(f), FORMATOS.index(f)))
+    ventana = recientes[: len(FORMATOS_EN_ROTACION) * 2]
+    candidatos = [f for f in FORMATOS_EN_ROTACION if f != ultimo] or list(FORMATOS_EN_ROTACION)
+    return min(candidatos, key=lambda f: (ventana.count(f), FORMATOS_EN_ROTACION.index(f)))
 
 
 def leer_planos(nota: str | None) -> list[dict]:

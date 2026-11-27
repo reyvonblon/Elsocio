@@ -657,7 +657,7 @@ class TestPlanosReelMundo(BaseContenido):
 
 
 class TestFormatosYRotacion(BaseContenido):
-    """El Socio no hace siempre el mismo video: rota mundo / collage / duelo."""
+    """El Socio no hace siempre el mismo video: rota los formatos aprobados."""
 
     def test_nunca_dos_reels_seguidos_con_el_mismo_formato(self) -> None:
         vistos = []
@@ -667,16 +667,26 @@ class TestFormatosYRotacion(BaseContenido):
             vistos.append(res["formato"])
         for a, b in zip(vistos, vistos[1:]):
             self.assertNotEqual(a, b, vistos)
-        self.assertEqual(set(vistos), set(content_manager.FORMATOS))
+        self.assertEqual(set(vistos), set(content_manager.FORMATOS_EN_ROTACION))
 
     def test_respeta_la_sugerencia_si_no_repite(self) -> None:
-        self.assertEqual(content_manager.elegir_formato("duelo", ["mundo"]), "duelo")
+        self.assertEqual(content_manager.elegir_formato("collage", ["mundo"]), "collage")
+
+    def test_un_formato_fuera_de_rotacion_nunca_sale_solo(self) -> None:
+        """`duelo` existe y se puede pedir a mano, pero el cerebro no lo elige hasta rediseñarlo."""
+        fuera = [f for f in content_manager.FORMATOS if f not in content_manager.FORMATOS_EN_ROTACION]
+        for f in fuera:
+            self.assertNotEqual(content_manager.elegir_formato(f, ["mundo"]), f)
+            self.assertNotEqual(content_manager.elegir_formato(f, []), f)
+        salidas = {content_manager.elegir_formato("", ["mundo"]), content_manager.elegir_formato("", ["collage"]),
+                   content_manager.elegir_formato("", [])}
+        self.assertFalse(salidas & set(fuera), salidas)
 
     def test_ignora_la_sugerencia_si_repite_el_ultimo(self) -> None:
         self.assertNotEqual(content_manager.elegir_formato("collage", ["collage", "mundo"]), "collage")
 
     def test_sugerencia_inventada_cae_en_la_rotacion(self) -> None:
-        self.assertIn(content_manager.elegir_formato("tiktok3d", []), content_manager.FORMATOS)
+        self.assertIn(content_manager.elegir_formato("tiktok3d", []), content_manager.FORMATOS_EN_ROTACION)
 
     def test_post_no_lleva_formato(self) -> None:
         res = content_manager.encolar(tipo="post", gancho="Frase limpia", formato="duelo")

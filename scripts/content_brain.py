@@ -115,7 +115,7 @@ _PROPIEDADES_PIEZA = {
     },
     "formato": {
         "type": "string",
-        "enum": list(content_manager.FORMATOS),
+        "enum": list(content_manager.FORMATOS_EN_ROTACION),
         "description": (
             "SOLO para 'video'. Cómo se va a VER el reel (la voz y el cierre son iguales en todos): "
             "'mundo' = ciudad isométrica, la cámara entra a los dos locales (ideal para contar un lugar: "
