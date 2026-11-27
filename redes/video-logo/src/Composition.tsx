@@ -1,4 +1,6 @@
 import { Composition } from "remotion";
+import { PruebaSocio } from "./PruebaSocio";
+import { ReelEscenaReal } from "./ReelEscenaReal";
 import { HistoriaVertical, historiaVerticalSchema } from "./HistoriaVertical";
 import { CarruselLaminas, carruselLaminasSchema, duracionCarrusel } from "./CarruselLaminas";
 import { LogoFrase, logoFraseSchema } from "./LogoFrase";
@@ -92,6 +94,24 @@ export const MyComposition = () => {
         }}
       />
       {/* Composición que usa generar_video.sh: elige el formato (mundo / collage / duelo) por props.formato. */}
+      <Composition
+        id="EscenaReal"
+        component={ReelEscenaReal}
+        durationInFrames={duracionReel({ bloques: new Array(6).fill("") })}
+        fps={30}
+        width={1080}
+        height={1920}
+        calculateMetadata={({ props }) => ({ durationInFrames: duracionReel(props) })}
+        defaultProps={{ gancho: "", bloques: [], cierre: "" } as never}
+      />
+      <Composition
+        id="PruebaSocio"
+        component={PruebaSocio}
+        durationInFrames={300}
+        fps={30}
+        width={1080}
+        height={1920}
+      />
       <Composition
         id="Reel"
         component={ReelAuto}

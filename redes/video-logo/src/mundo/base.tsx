@@ -1,4 +1,5 @@
 import React from "react";
+import { useCurrentFrame } from "remotion";
 
 /**
  * Primitivas del mundo isométrico de El Socio (SVG puro, cero dependencias).
@@ -44,9 +45,9 @@ export const MUNDO = {
   madera: "#c9935f",
   maderaOscura: "#a5713f",
   concreto: "#bdb8ae",
-  piel: ["#e0b48c", "#c58c63", "#8d5a3b", "#f0c9a5"],
-  pelo: ["#2b2420", "#4a3426", "#151515", "#7a5a3a"],
-  ropa: ["#3f5163", "#9c1c2e", "#d9a441", "#5f7a5c", "#6c5a7d", "#e9e2d3", "#2f2f35"],
+  piel: ["#e0b48c", "#c58c63", "#8d5a3b", "#f0c9a5", "#a86f49", "#6f452c"],
+  pelo: ["#2b2420", "#4a3426", "#151515", "#7a5a3a", "#5c4030", "#8a6a45", "#3a2a22", "#d6c9b0"],
+  ropa: ["#3f5163", "#9c1c2e", "#d9a441", "#5f7a5c", "#6c5a7d", "#e9e2d3", "#2f2f35", "#2f6f7d", "#b2563a", "#7b8ea3", "#4b6b4f", "#a8456b", "#c98f3f", "#3b3f5c"],
   edificios: ["#efe6d4", "#e2d6bf", "#d8d8d3", "#e8d8bd", "#cfd3d8", "#f1ece2", "#dccbb5", "#c9c7c0"],
 } as const;
 
@@ -201,16 +202,39 @@ export const TextoPlanoX: React.FC<{
 
 const elegir = <T,>(lista: readonly T[], semilla: number): T => lista[Math.abs(Math.floor(semilla)) % lista.length];
 
+/**
+ * Reparto del reel. Cada persona del escenario elegía su piel, su pelo y su ropa con una semilla
+ * fija por posición: el mismo interior salía SIEMPRE con la misma gente, en el mismo sitio y con la
+ * misma ropa, reel tras reel. Con un número por pieza, el mismo escenario se puebla con otro
+ * reparto cada vez — y eso, sin dibujar a nadie nuevo, rompe buena parte de la monotonía que
+ * señaló Raymond (2026-11-27).
+ */
+export const RepartoCtx = React.createContext(0);
+
 export const Persona: React.FC<{
   x: number; y: number; z?: number; semilla?: number; ropa?: string; sentada?: boolean; casco?: boolean; brazosArriba?: boolean; cabizbaja?: boolean; paso?: number;
-}> = ({ x, y, z = 0, semilla = 0, ropa, sentada = false, casco = false, brazosArriba = false, cabizbaja = false, paso = 0 }) => {
+}> = ({ x, y, z = 0, semilla: semillaBase = 0, ropa, sentada = false, casco = false, brazosArriba = false, cabizbaja = false, paso }) => {
+  const reparto = React.useContext(RepartoCtx);
+  const semilla = semillaBase + reparto * 3;
+  // Las personas estaban congeladas: `paso` existía desde el principio pero NINGUNA llamada se lo
+  // pasaba, así que el balanceo valía siempre sin(0)=0. Ahora, si nadie lo fija, cada persona
+  // camina a su propio ritmo (la semilla las desfasa para que no vayan todas a la vez).
+  const frameActual = useCurrentFrame();
+  const pasoReal = paso ?? frameActual * 0.17 + semilla * 1.7;
   const piel = elegir(MUNDO.piel, semilla);
   const pelo = elegir(MUNDO.pelo, semilla + 1);
   const color = ropa ?? elegir(MUNDO.ropa, semilla + 2);
   const altPiernas = sentada ? 7 : 15;
   const zt = z + altPiernas;
   const [hx, hy] = iso(x, y, zt + 26);
-  const balanceo = Math.sin(paso) * 2.2;
+  // Mecánica aprendida de la referencia MOKO (guía §15): un personaje vivo mueve el cuerpo ENTERO
+  // todo el rato — hombros, cabeza y manos — no solo las piernas. Cada eje lleva su propia
+  // frecuencia y su desfase por semilla: si todo oscila al mismo compás se ve como un muñeco.
+  const balanceo = Math.sin(pasoReal) * 2.2;
+  const respira = Math.sin(pasoReal * 0.5) * 0.9;
+  const gesticula = Math.sin(pasoReal * 0.78 + semilla) * 2.6;
+  const ladeo = Math.sin(pasoReal * 0.33 + semilla * 2.1) * 1.9;
+  const asiente = Math.sin(pasoReal * 0.61 + semilla * 0.7) * 1.1;
   return (
     <g>
       <ellipse cx={iso(x, y, z)[0]} cy={iso(x, y, z)[1] + 1} rx={9} ry={4.5} fill="rgba(40,30,20,0.18)" />
@@ -222,19 +246,26 @@ export const Persona: React.FC<{
           <Caja x={x} y={y - 3 - balanceo} z={z} w={4} d={5} h={altPiernas} c={tono("#34343d")} sw={0.8} />
         </>
       )}
-      <Caja x={x - 5} y={y - 4} z={zt} w={10} d={8} h={19} c={tono(color)} sw={0.9} />
+      <Caja x={x - 5} y={y - 4} z={zt + respira} w={10} d={8} h={19} c={tono(color)} sw={0.9} />
       {brazosArriba ? (
         <>
-          <Linea a={[x - 5, y + 2, zt + 17]} b={[x - 9, y + 4, zt + 31]} s={piel} sw={3.4} />
-          <Linea a={[x + 5, y - 2, zt + 17]} b={[x + 9, y - 4, zt + 31]} s={piel} sw={3.4} />
+          <Linea a={[x - 5, y + 2, zt + 17]} b={[x - 9, y + 4 + gesticula, zt + 31 - gesticula]} s={piel} sw={3.4} />
+          <Linea a={[x + 5, y - 2, zt + 17]} b={[x + 9, y - 4 - gesticula, zt + 31 + gesticula]} s={piel} sw={3.4} />
         </>
-      ) : null}
-      <circle cx={hx} cy={hy + (cabizbaja ? 3 : 0)} r={7.2} fill={piel} stroke={mezclar(piel, -0.4)} strokeWidth={0.9} />
+      ) : (
+        /* Antes los brazos solo existían con `brazosArriba`: el resto del tiempo la figura era un
+           tronco sin extremidades, y un tronco no parece vivo por mucho que mueva los pies. */
+        <>
+          <Linea a={[x - 5, y + 2, zt + 16]} b={[x - 7, y + 4 + gesticula * 0.6, zt + 4 - gesticula]} s={piel} sw={3} />
+          <Linea a={[x + 5, y - 2, zt + 16]} b={[x + 7, y - 4 - gesticula * 0.6, zt + 4 + gesticula]} s={piel} sw={3} />
+        </>
+      )}
+      <circle cx={hx + ladeo} cy={hy + (cabizbaja ? 3 : 0) - respira + asiente} r={7.2} fill={piel} stroke={mezclar(piel, -0.4)} strokeWidth={0.9} />
       <path
-        d={`M ${hx - 7.2} ${hy - 1 + (cabizbaja ? 3 : 0)} A 7.2 7.2 0 0 1 ${hx + 7.2} ${hy - 1 + (cabizbaja ? 3 : 0)} Q ${hx} ${hy - 4} ${hx - 7.2} ${hy - 1 + (cabizbaja ? 3 : 0)} Z`}
+        d={`M ${hx + ladeo - 7.2} ${hy - 1 + (cabizbaja ? 3 : 0) - respira + asiente} A 7.2 7.2 0 0 1 ${hx + ladeo + 7.2} ${hy - 1 + (cabizbaja ? 3 : 0) - respira + asiente} Q ${hx + ladeo} ${hy - 4 - respira + asiente} ${hx + ladeo - 7.2} ${hy - 1 + (cabizbaja ? 3 : 0) - respira + asiente} Z`}
         fill={pelo}
       />
-      {casco ? <ellipse cx={hx} cy={hy - 4} rx={8.6} ry={5} fill="#d9a441" stroke="#8a6420" strokeWidth={1} /> : null}
+      {casco ? <ellipse cx={hx + ladeo} cy={hy - 4 - respira + asiente} rx={8.6} ry={5} fill="#d9a441" stroke="#8a6420" strokeWidth={1} /> : null}
     </g>
   );
 };

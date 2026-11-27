@@ -708,6 +708,15 @@ const Mascota: React.FC<{ frame: number; lado: Lado; k: number }> = ({ frame, la
   const feliz = lado === "B";
   const brinco = feliz ? Math.abs(Math.sin(frame * 0.18)) * 14 : Math.abs(Math.sin(frame * 0.07)) * 3;
   const brazo = feliz ? Math.sin(frame * 0.4) * 30 - 40 : 20;
+  // Mecánica 1 de la referencia MOKO (guía §15.1): el personaje HABLA. Allí la boca abre y cierra
+  // cada 2-3 fotogramas a 10 fps; aquí, a 30, un ciclo cada 7 frames (~4 veces por segundo). Era lo
+  // que más hacía parecer vivo ese dibujo, y la mascota tenía la boca como un path FIJO: la misma
+  // mueca durante los 27 s del reel. Los demás ejes van a su propia frecuencia (si todo oscila al
+  // mismo compás se ve como un muñeco de cuerda).
+  const abreBoca = Math.sin(frame * 0.9) > 0.1;
+  const brazoIzq = feliz ? Math.sin(frame * 0.4 + 1.6) * 22 : -14;
+  const ladea = Math.sin(frame * 0.23) * 3.5;
+  const asiente = Math.sin(frame * 0.5) * 2;
   const entra = spring({ frame: k, fps: 30, config: { damping: 12, stiffness: 160 } });
   // Mismo truco de sombra que `Recorte`: copia negra desplazada en vez de `filter: drop-shadow`.
   const cuerpo = (
@@ -718,7 +727,9 @@ const Mascota: React.FC<{ frame: number; lado: Lado; k: number }> = ({ frame, la
         <g transform={`rotate(${brazo} 175 160)`}>
           <rect x={165} y={150} width={26} height={74} rx={13} fill={MUNDO.vino} />
         </g>
-        <rect x={38} y={150} width={26} height={70} rx={13} fill={MUNDO.vino} />
+        <g transform={`rotate(${brazoIzq} 51 160)`}>
+          <rect x={38} y={150} width={26} height={70} rx={13} fill={MUNDO.vino} />
+        </g>
         <rect x={55} y={120} width={120} height={95} rx={26} fill={MUNDO.vino} />
         <path d="M 115 122 L 95 165 L 115 190 L 135 165 Z" fill={PAPEL} />
         <rect x={50} y={36} width={130} height={100} rx={28} fill="#e8c39e" />
@@ -731,11 +742,24 @@ const Mascota: React.FC<{ frame: number; lado: Lado; k: number }> = ({ frame, la
       <path d="M 109 80 Q 115 74 121 80" stroke="#1c1c20" strokeWidth={5} fill="none" />
       <circle cx={92} cy={83} r={5} fill="#1c1c20" />
       <circle cx={138} cy={83} r={5} fill="#1c1c20" />
-      <path d={feliz ? "M 96 110 Q 115 126 134 110" : "M 98 118 Q 115 108 132 118"} stroke="#1c1c20" strokeWidth={6} fill="none" strokeLinecap="round" />
+      {abreBoca ? (
+        <ellipse cx={115} cy={feliz ? 114 : 116} rx={feliz ? 19 : 13} ry={feliz ? 13 : 8} fill="#1c1c20" />
+      ) : (
+        <path d={feliz ? "M 96 110 Q 115 126 134 110" : "M 98 118 Q 115 108 132 118"} stroke="#1c1c20" strokeWidth={6} fill="none" strokeLinecap="round" />
+      )}
     </>
   );
   return (
-    <svg width={230} height={290} viewBox="0 0 230 290" style={{ overflow: "visible", transform: `translateY(${-brinco}px) scale(${0.92 + 0.08 * entra})` }}>
+    <svg
+      width={230}
+      height={290}
+      viewBox="0 0 230 290"
+      style={{
+        overflow: "visible",
+        transformOrigin: "50% 88%",
+        transform: `translateY(${(-brinco + asiente).toFixed(2)}px) rotate(${ladea.toFixed(2)}deg) scale(${0.92 + 0.08 * entra})`,
+      }}
+    >
       <g className="sombraPapel" transform="translate(0 10)" opacity={0.28}>
         {cuerpo}
       </g>

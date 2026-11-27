@@ -39,12 +39,20 @@ export const FONDO_LOTE = 200;
 const ALTO_PARED = 118;
 
 /** Entrada con resorte: los objetos caen en su sitio uno tras otro. */
+/**
+ * Entrada escalonada de cada grupo de la escena. El escalón era de 2.5 FOTOGRAMAS por grupo: los
+ * tres grupos de un interior aparecían dentro de los primeros 5 frames (0,17 s) y el resto del
+ * plano —unos 2,5 s— quedaba congelado. Medido sobre el reel real: 2 cambios de imagen en 27 s,
+ * contra los 87 de la referencia. Ahora el escalón es de 9 frames (la escena se arma en ~1 s) y
+ * cada grupo conserva una flotación propia para que nada quede del todo quieto.
+ */
 const Entra: React.FC<{ t: number; fps: number; orden: number; children: React.ReactNode }> = ({ t, fps, orden, children }) => {
-  const inicio = orden * 2.5;
+  const inicio = orden * 9;
   if (t < inicio) return null;
   const k = spring({ frame: t - inicio, fps, config: { damping: 15, mass: 0.6, stiffness: 170 } });
+  const flota = Math.sin((t - inicio) * 0.09 + orden * 2.1) * 1.8;
   return (
-    <g opacity={Math.min(1, k * 1.6)} transform={`translate(0 ${((1 - k) * -26).toFixed(1)})`}>
+    <g opacity={Math.min(1, k * 1.6)} transform={`translate(0 ${((1 - k) * -26 + flota).toFixed(2)})`}>
       {children}
     </g>
   );

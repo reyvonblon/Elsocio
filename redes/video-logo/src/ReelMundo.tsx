@@ -1,6 +1,6 @@
 import React from "react";
 import { AbsoluteFill, Easing, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
-import { MUNDO, iso } from "./mundo/base";
+import { MUNDO, iso, RepartoCtx } from "./mundo/base";
 import { ANCLAS, type EstadoLote, type NombreNicho } from "./mundo/interiores";
 import { Ciudad, indiceLote, origenLote } from "./mundo/ciudad";
 import {
@@ -33,6 +33,44 @@ type Props = PropsReel;
 export const duracionReelMundo = duracionReel;
 export { deducirNicho };
 const CENTRO_ESCENA_Y = 1150;
+
+/**
+ * Ambientes de luz. El mismo escenario a distinta hora es otro video: cambia el fondo, el color
+ * general y el contraste, sin redibujar nada. Nace de la cuenta que pidió Raymond (2026-11-27):
+ * para 60 reels al mes hacen falta 60 combinaciones visuales y el motor solo tenía 8
+ * (2 formatos x 4 nichos). Multiplicar por 4 aquí sale gratis en dibujo y es lo que más se nota.
+ * La variante de noche ya estaba anotada como pendiente en la guía §13 ("Dos DJs").
+ */
+export const AMBIENTES = ["dia", "atardecer", "noche", "nublado"] as const;
+export type Ambiente = (typeof AMBIENTES)[number];
+
+const LUZ: Record<Ambiente, { fondo: string; filtro: string; velo: string }> = {
+  dia: { fondo: MUNDO.plaza, filtro: "none", velo: "" },
+  atardecer: {
+    fondo: "#e2c49c",
+    filtro: "saturate(1.12) brightness(1.02)",
+    velo: "linear-gradient(180deg, rgba(255,168,88,0.38) 0%, rgba(196,96,62,0.30) 100%)",
+  },
+  noche: {
+    fondo: "#2b3446",
+    filtro: "brightness(0.60) saturate(0.78)",
+    velo: "linear-gradient(180deg, rgba(38,58,112,0.52) 0%, rgba(14,20,40,0.66) 100%)",
+  },
+  nublado: {
+    fondo: "#c4c7c4",
+    filtro: "saturate(0.52) contrast(0.94)",
+    velo: "linear-gradient(180deg, rgba(150,160,172,0.32) 0%, rgba(116,126,138,0.38) 100%)",
+  },
+};
+
+/**
+ * Tope de acercamiento. Un local con sus paredes ocupa 384 x 340 unidades ya proyectadas
+ * ((x-y)·cos30 y (x+y)/2-z sobre 236 x 208 x 118). A 1080 px de ancho con un margen del 5%,
+ * el zoom que lo deja entero es 972/384 = 2.53. La toma `detalle` estaba en 3.3 y la deriva le
+ * sumaba otro 7%: 1284 px de escena dentro de un cuadro de 1080, o sea las paredes cortadas a
+ * los lados en el plano MÁS usado del reel. El tope se aplica al final, con deriva incluida.
+ */
+const ZOOM_MAX = 2.5;
 
 
 
@@ -238,19 +276,35 @@ const poseDe = (p: PlanoResuelto): Pose => {
     case "pareja":
       return { x: medio, y: 150, z: 120, zoom: 1.12, lote: -1 };
     case "calle":
-      return { x: ox + 110, y: 170, z: 118, zoom: 1.4, lote: il };
+      return { x: ox + 110, y: 170, z: 118, zoom: 1.3, lote: il };
     case "local":
-      return { x: ox + 112, y: 108, z: 34, zoom: 2.05, lote: il };
+      return { x: ox + 112, y: 108, z: 34, zoom: 1.8, lote: il };
     case "detalle":
     default: {
       const a = ANCLAS[p.nicho][p.foco] ?? ANCLAS[p.nicho].centro;
-      return { x: ox + a[0], y: a[1] + 10, z: a[2] - 8, zoom: 3.3, lote: il };
+      // Base por debajo del tope: así el gesto que acerca tiene recorrido visible (2,1 → 2,5)
+      // en vez de nacer ya topado y quedarse quieto.
+      return { x: ox + a[0], y: a[1] + 10, z: a[2] - 8, zoom: 2.1, lote: il };
     }
   }
 };
 
 const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 const lerpLog = (a: number, b: number, k: number) => Math.exp(lerp(Math.log(a), Math.log(b), k));
+
+/**
+ * Un gesto de cámara distinto por plano. La variedad de DIRECCIÓN es lo que hace que el movimiento
+ * se note: si todos los planos se acercan igual, el ojo deja de registrarlo a los dos planos.
+ * Acercarse, alejarse revelando, panear de lado, subir. Como en la referencia MOKO (§15), que no
+ * tiene un solo plano fijo en todo el tramo analizado.
+ */
+const GESTOS = [
+  { zoom: 0.26, x: 30, y: -18 },   // entra acercándose
+  { zoom: -0.17, x: -26, y: 14 },  // se aleja y revela el entorno
+  { zoom: 0.12, x: 40, y: 6 },     // paneo lateral largo
+  { zoom: 0.2, x: -20, y: -24 },   // sube mientras se acerca
+  { zoom: -0.12, x: 22, y: 20 },   // baja alejándose
+];
 
 const camaraEn = (planos: PlanoResuelto[], seg: number, fps: number): Pose & { activo: number } => {
   let i = 0;
@@ -259,14 +313,20 @@ const camaraEn = (planos: PlanoResuelto[], seg: number, fps: number): Pose & { a
   const destino = poseDe(p);
   const dur = Math.max(0.6, p.fin - p.inicio);
   const tEn = seg - p.inicio;
-  // Deriva lenta dentro del plano: la imagen nunca está quieta (guía §1: nada estático > 3 s).
-  const deriva = interpolate(tEn, [0, dur], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-  const conDeriva = (q: Pose, k: number): Pose => ({ ...q, zoom: q.zoom * (1 + 0.07 * k), x: q.x + 6 * k, y: q.y - 4 * k });
+  // Movimiento de cámara dentro del plano (guía §15, regla 1: la cámara no se detiene jamás).
+  // Antes era siempre el mismo gesto, lineal y mínimo (+7% de zoom, 6 unidades de paneo): tan poco
+  // y tan previsible que ni el detector de escena más sensible lo registraba — 2 cambios en 27 s
+  // contra los 76 de la referencia que Raymond aprobó. Ahora cada plano recibe un gesto distinto,
+  // con amplitud real y con easing para que acelere y frene como una cámara de verdad.
+  const suave = interpolate(tEn, [0, dur], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.quad) });
+  const g = GESTOS[i % GESTOS.length];
+  const conDeriva = (q: Pose, k: number): Pose => ({ ...q, zoom: q.zoom * (1 + g.zoom * k), x: q.x + g.x * k, y: q.y + g.y * k });
+  const deriva = suave;
   if (i === 0) {
     // Gancho: la cámara cae en picada sobre la cuadra en 0.7 s (golpe visual del primer segundo).
     const caida = interpolate(tEn, [0, 0.7], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.exp) });
     const fin = conDeriva(destino, deriva);
-    return { ...fin, zoom: lerpLog(fin.zoom * 0.66, fin.zoom, caida), y: fin.y - 140 * (1 - caida), activo: i };
+    return { ...fin, zoom: Math.min(ZOOM_MAX, lerpLog(fin.zoom * 0.66, fin.zoom, caida)), y: fin.y - 140 * (1 - caida), activo: i };
   }
 
   const origen = conDeriva(poseDe(planos[i - 1]), 1);
@@ -285,7 +345,8 @@ const camaraEn = (planos: PlanoResuelto[], seg: number, fps: number): Pose & { a
     zoom = lerpLog(origen.zoom, fin.zoom, k);
   }
   const lote = k < 0.5 ? origen.lote : destino.lote;
-  return { x: lerp(origen.x, fin.x, k), y: lerp(origen.y, fin.y, k), z: lerp(origen.z, fin.z, k), zoom, lote, activo: i };
+  // El tope va al final, con la deriva ya aplicada: es lo que garantiza que la escena no se salga.
+  return { x: lerp(origen.x, fin.x, k), y: lerp(origen.y, fin.y, k), z: lerp(origen.z, fin.z, k), zoom: Math.min(ZOOM_MAX, zoom), lote, activo: i };
 };
 
 
@@ -407,10 +468,22 @@ export const ReelMundo: React.FC<Props> = (props) => {
 
   const badge = (props.badge || BADGE_NICHO[nicho]).replace(/[0-9$%]/g, "").toUpperCase().slice(0, 18);
   const progreso = frame / Math.max(1, durationInFrames - 1);
+  const ambiente: Ambiente = (AMBIENTES as readonly string[]).includes(props.ambiente || "")
+    ? (props.ambiente as Ambiente)
+    : "dia";
+  const luz = LUZ[ambiente];
 
   return (
-    <AbsoluteFill style={{ backgroundColor: MUNDO.plaza, fontFamily: FUENTE, overflow: "hidden" }}>
-      <svg width={1080} height={1920} viewBox="0 0 1080 1920" style={{ position: "absolute", left: 0, top: 0 }}>
+    <RepartoCtx.Provider value={Math.floor(props.reparto ?? 0)}>
+    <AbsoluteFill style={{ backgroundColor: luz.fondo, fontFamily: FUENTE, overflow: "hidden" }}>
+      <svg
+        width={1080}
+        height={1920}
+        viewBox="0 0 1080 1920"
+        style={{ position: "absolute", left: 0, top: 0, filter: luz.filtro }}
+      >
+        {/* El reparto es constante durante TODO el reel: la gente cambia entre videos, nunca a
+            mitad de uno — si cambiara dentro, el ojo perdería a quién está siguiendo. */}
         <g transform={transformMundo}>
           <Ciudad
             frame={frame}
@@ -426,6 +499,10 @@ export const ReelMundo: React.FC<Props> = (props) => {
           />
         </g>
       </svg>
+
+      {/* Velo de color del ambiente: va SOBRE la escena y DEBAJO del texto, para que el titular y
+          el subtítulo conserven su contraste a cualquier hora del día. */}
+      {luz.velo ? <AbsoluteFill style={{ background: luz.velo, pointerEvents: "none" }} /> : null}
 
       {/* Banda superior crema que se funde con la escena (como la referencia) */}
       <div
@@ -476,5 +553,6 @@ export const ReelMundo: React.FC<Props> = (props) => {
         <div style={{ width: `${(progreso * 100).toFixed(1)}%`, height: "100%", borderRadius: 3, backgroundColor: MUNDO.vino }} />
       </div>
     </AbsoluteFill>
+    </RepartoCtx.Provider>
   );
 };

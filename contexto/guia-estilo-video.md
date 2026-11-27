@@ -259,3 +259,67 @@ La guarda de ventas deja pasar plazos ("sale en 15 días") a propósito, porque 
 normales. En un video NO: §4 prohíbe toda cifra. `content_manager._cifras_en_pantalla()` bloquea
 ahora cualquier dígito en gancho, guion, caption, etiquetas y tooltips de una pieza. La misma idea en
 letras ("en quince días") sí pasa: lo prohibido es el dígito en pantalla, no la idea.
+
+---
+
+## §15 Referencia "MADE IN CHINA" (MOKO) — la que pidió Raymond el 2026-11-26
+
+Archivo: `contexto/referencias_video/moko_made_in_china.mov` (45,4 s · 1104x1908 · 60 fps).
+Hojas de contacto del análisis en `contexto/referencias_video/moko_analisis/`.
+
+### Lo que NO se puede copiar (y por qué)
+Es animación de personajes 2D dibujados, con expresión facial, labios sincronizados y cámara de cine.
+El motor de El Socio es SVG isométrico vectorial: no dibuja caras ni actúa personajes. Intentar
+imitar el **estilo** sería pelear contra el material. Se copia la **mecánica** (guía §4).
+
+### Medición (mismo indicador que usamos en los reels propios)
+| | Micro-movimiento (scene > 0,1) | Cortes duros (scene > 0,25) |
+|---|---|---|
+| MOKO | **76 por 30 s** | **1 por 30 s** |
+| Referencia vieja (video 2) | 87 por 30 s | 10 por 30 s |
+| `content_0005` (mundo) | **2 por 30 s** | 2 por 30 s |
+
+**El hallazgo que corrige §1:** esta referencia es la que Raymond llama "fluida y limpia", y casi no
+tiene cortes (1 cada 30 s). La fluidez NO viene de cortar más. Viene de que **nada está quieto nunca**
+entre corte y corte. El §1 pedía "un corte cada 2 s" leyendo otra referencia; para el efecto que
+Raymond quiere, lo que manda es el movimiento continuo, no la frecuencia de corte.
+
+### Las 5 reglas que sí se copian
+1. **La cámara no se detiene jamás.** En los 6 s analizados fotograma a fotograma no hay un solo plano
+   fijo: siempre hay paneo o acercamiento lento. Un plano quieto es un plano muerto.
+2. **Un sujeto grande por plano.** El protagonista ocupa 50-70% del alto del cuadro. Nunca una vista
+   general donde todo es pequeño. En isométrico: acercarse al objeto que nombra la voz, no mostrar
+   la escena entera desde lejos.
+3. **Profundidad por capas.** Siempre hay algo en primer plano (botellas, platos) delante del sujeto,
+   y fondo oscuro detrás. El Socio dibuja todo en un plano único: falta ese delante/detrás.
+4. **Paleta oscura con acentos saturados.** Fondo nocturno + un rojo o azul fuerte en el punto de
+   interés. El Socio hoy es beige sobre beige: en el feed se pierde.
+5. **Subtítulo discreto.** Dos o tres palabras pequeñas abajo, blancas, sin caja. No compite con la
+   imagen. (El karaoke grande actual ocupa el triple.)
+
+### Pendiente antes de escribir guiones que lo usen
+Las reglas 3 y 4 necesitan trabajo en `mundo/`: hoy no existe capa de primer plano ni variante
+nocturna de las escenas.
+
+### §15.1 Cómo anima MOKO a los personajes (medido a 10 fps sobre el tramo 7,5-9,5 s)
+
+Hoja de contacto: `contexto/referencias_video/moko_analisis/personaje.jpg`.
+
+| Qué se mueve | Cada cuánto | Lo que teníamos |
+|---|---|---|
+| **La boca, al hablar** | abre/cierra cada 2-3 fotogramas | boca dibujada como path FIJO: la misma mueca 27 s |
+| Cabeza: gira e inclina | continuo, nunca fija | cabeza clavada al torso |
+| Hombros y torso | continuo | torso rígido |
+| Manos: gesticulan, suben a la cara | por frase | `Persona` solo tenía brazos si `brazosArriba` |
+| Piernas | al caminar | existía `paso`, pero NINGUNA llamada se lo pasaba |
+
+**La regla:** un personaje vivo mueve el cuerpo ENTERO todo el rato, no una parte. Y cada eje va a su
+propia frecuencia con su desfase — si todo oscila al mismo compás se ve como un muñeco de cuerda.
+
+**Lo más barato y lo que más rinde: la boca.** Es lo que más hace que un dibujo parezca vivo. En
+`Mascota` (collage) ya está: un ciclo cada 7 frames (~4 veces por segundo).
+
+**Techo conocido:** en el formato `mundo` las personas miden ~65 px de alto con el zoom máximo.
+Animarlas mejora, pero no se percibe como en MOKO, donde el personaje ocupa 50-70% del cuadro
+(regla 2 de §15). Para acercarse de verdad al efecto haría falta un personaje grande en primer
+plano, que hoy solo existe en `collage` (la mascota) y no en `mundo`.

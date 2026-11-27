@@ -105,8 +105,11 @@ FILTRO_MASTER_VOZ = f"{FILTRO_CADENA_VOZ},{FILTRO_MASTER_LUFS}"
 # Parámetros del protocolo Edge ReadAloud v2 (stdlib puro).
 _EDGE_HOST = "speech.platform.bing.com"
 _EDGE_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
-_CHROMIUM_VER = "143.0.3650.75"
-_CHROMIUM_MAJOR = "143"
+# Microsoft rechaza el handshake de versiones viejas de Chromium: el 2026-11-27 dejó de aceptar
+# 143-146 ("Connection reset by peer" antes de responder) y el TTS cayó entero. Si vuelve a pasar,
+# subir este número es el arreglo: se prueba una versión mayor hasta que el handshake pase.
+_CHROMIUM_VER = "147.0.3850.20"
+_CHROMIUM_MAJOR = "147"
 _WIN_EPOCH = 11644473600
 _MP3_CBR_BYTES_PER_SEC = 6000.0  # 48 kbps exactos = 6000 bytes/s
 
@@ -761,14 +764,23 @@ def sintetizar_edge_con_marcas(
     rate_def = "+4%" if es_voz_multilingual(voz) else "+6%"
     rate = (rate_override or cfg.get("VOICE_RATE") or rate_def).strip()
     pitch = (pitch_override or cfg.get("VOICE_PITCH") or "+0Hz").strip()
-    try:
-        return _sintetizar_edge_una_vez(texto, voz, rate, pitch)
-    except ErrorVoz as err:
-        if "HTTP_403_RELOJ" in str(err):
+    # Un Reel son 8 frases = 8 conexiones seguidas al servicio de Microsoft. Antes, un corte en
+    # CUALQUIERA de ellas tiraba el reel entero: solo se reintentaba el error de reloj, y un
+    # "Connection reset by peer" (que ocurre a menudo, el servicio corta sin avisar) se propagaba
+    # como fallo definitivo. El 2026-11-27 eso dejó al Socio sin poder generar un solo video.
+    ultimo: Exception | None = None
+    for intento in range(4):
+        try:
             return _sintetizar_edge_una_vez(texto, voz, rate, pitch)
-        raise
-    except OSError as exc:
-        raise ErrorVoz(f"Red no disponible para voz neuronal: {exc}") from None
+        except ErrorVoz as err:
+            ultimo = err
+            if "HTTP_403_RELOJ" not in str(err) and intento == 3:
+                raise
+        except OSError as exc:
+            ultimo = exc
+        if intento < 3:
+            time.sleep(1.5 * (intento + 1))
+    raise ErrorVoz(f"Voz neuronal no disponible tras 4 intentos: {ultimo}") from None
 
 
 def sintetizar_edge_neural(texto: str, cfg: dict[str, str]) -> bytes:

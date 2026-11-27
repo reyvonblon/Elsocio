@@ -49,6 +49,10 @@ export const reelSchema = z.object({
   tiemposCortes: z.array(z.number()).optional(),
   duracionFrames: z.number().optional(),
   escena: z.string().optional(),
+  /** Hora del día de la escena: dia | atardecer | noche | nublado (ver AMBIENTES en ReelMundo). */
+  ambiente: z.string().optional(),
+  /** Número del reparto: cambia la gente del escenario entre REELES, nunca dentro de uno. */
+  reparto: z.number().optional(),
 });
 export type PropsReel = z.infer<typeof reelSchema>;
 
