@@ -244,6 +244,56 @@ def _detalle_conversion_dia(fecha: str) -> dict:
     }
 
 
+# ffprobe por pieza es barato, pero `/api/estado` se pide cada 15 s: sin cache serian
+# decenas de procesos por minuto. Se cachea por (ruta, fecha de modificacion).
+_CACHE_AUDIO: dict[tuple[str, float], dict] = {}
+
+
+def _path_herramientas() -> str:
+    import os
+    from pathlib import Path as _P
+    partes = [str(_P.home() / ".local" / "bin"), "/usr/local/bin", "/opt/homebrew/bin",
+              "/usr/bin", "/bin"]
+    actual = os.environ.get("PATH", "")
+    return ":".join(partes + ([actual] if actual else []))
+
+
+def _audio_de(ruta_txt: str) -> dict:
+    """Que trae el audio de un video. Cero adivinanza: lo que diga ffprobe.
+
+    El motor de Reels no monta musica (no hay un solo <Audio> en `redes/video-logo/src`):
+    lo unico que suena es la voz narrada. Por eso `musica` es False por construccion, no
+    por deteccion — y se dice explicito en vez de dejar al usuario suponiendo.
+    """
+    from pathlib import Path as _P
+    ruta = _P(ruta_txt)
+    if not ruta.is_absolute():
+        ruta = _P(__file__).resolve().parent.parent / ruta
+    if not ruta.is_file() or ruta.suffix.lower() != ".mp4":
+        return {}
+    clave = (str(ruta), ruta.stat().st_mtime)
+    if clave in _CACHE_AUDIO:
+        return _CACHE_AUDIO[clave]
+    import subprocess
+    datos = {"tiene_audio": False, "musica": False, "detalle": "sin audio"}
+    try:
+        salida = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=codec_name,channels", "-of", "csv=p=0", str(ruta)],
+            capture_output=True, text=True, timeout=15, check=True,
+            env={"PATH": _path_herramientas()},
+        ).stdout.strip()
+        if salida:
+            partes = salida.split(",")
+            canales = partes[1] if len(partes) > 1 else "?"
+            datos = {"tiene_audio": True, "musica": False,
+                     "detalle": f"voz narrada ({canales} canal) · sin música"}
+    except Exception:
+        datos = {"tiene_audio": False, "musica": False, "detalle": "no se pudo leer el audio"}
+    _CACHE_AUDIO[clave] = datos
+    return datos
+
+
 def construir_pendientes(limite: int = 30) -> dict:
     """Lo que está en cola esperando salir, con su vista previa y si de verdad puede salir.
 
@@ -279,15 +329,37 @@ def construir_pendientes(limite: int = 30) -> dict:
         else:
             puede, motivo = True, "lista para salir"
 
+        cid = int(fila["id"])
+        hashtags = [h for h in str(fila.get("hashtags_ig") or "").split(",") if h.strip()]
+        previstos = False
+        if not hashtags:
+            # Los hashtags se sellan al publicar; antes de salir se muestran los que USARIA,
+            # marcados como previstos para no hacerlos pasar por definitivos.
+            hashtags = ig_publisher.obtener_mejores_hashtags_ig()
+            previstos = True
+
+        laminas = []
+        if tipo == "carrusel" and tiene_archivo:
+            try:
+                import content_manager
+                laminas = [f"/media/{cid}_{n}"
+                           for n in range(1, len(content_manager.archivos_carrusel(fila["archivo"])) + 1)]
+            except Exception:
+                laminas = []
+
         piezas.append({
-            "id": int(fila["id"]),
+            "id": cid,
+            "hashtags": hashtags,
+            "hashtags_previstos": previstos,
+            "laminas": laminas,
+            "audio": _audio_de(str(fila.get("archivo") or "")) if tipo == "video" else {},
             "tipo": tipo,
             "estado": estado,
             "gancho": str(fila.get("gancho") or "")[:150],
             "creada": _iso(fila.get("created_at")),
             "tiene_archivo": tiene_archivo,
-            "preview": f"/poster/{int(fila['id'])}" if tiene_archivo else "",
-            "media": f"/media/{int(fila['id'])}" if tiene_archivo else "",
+            "preview": f"/poster/{cid}" if tiene_archivo else "",
+            "media": f"/media/{cid}" if tiene_archivo else "",
             "puede_salir": puede,
             "motivo": motivo,
             "cupo": f"{hoy}/{tope}",
