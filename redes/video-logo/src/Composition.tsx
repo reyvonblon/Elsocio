@@ -1,6 +1,7 @@
 import { Composition } from "remotion";
 import { PruebaSocio } from "./PruebaSocio";
 import { PruebaPixel } from "./PruebaPixel";
+import { ReelPixel, duracionCapitulo } from "./ReelPixel";
 import { ReelEscenaReal } from "./ReelEscenaReal";
 import { HistoriaVertical, historiaVerticalSchema } from "./HistoriaVertical";
 import { CarruselLaminas, carruselLaminasSchema, duracionCarrusel } from "./CarruselLaminas";
@@ -112,6 +113,17 @@ export const MyComposition = () => {
         fps={30}
         width={1080}
         height={1920}
+      />
+      {/* Reel en pixel art, formato capítulo. Capítulos: taller | obra | azotea. */}
+      <Composition
+        id="ReelPixel"
+        component={ReelPixel}
+        durationInFrames={duracionCapitulo({ capitulo: "taller" })}
+        fps={30}
+        calculateMetadata={({ props }) => ({ durationInFrames: duracionCapitulo(props) })}
+        width={1080}
+        height={1920}
+        defaultProps={{ capitulo: "taller" }}
       />
       {/* Banco de pruebas del pixel art isométrico. Vistas: taller | cerca | parque. */}
       <Composition

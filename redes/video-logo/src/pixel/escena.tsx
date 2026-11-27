@@ -25,7 +25,18 @@ export const MATERIALES: Record<string, Tonos> = {
 
 export type Mueble =
   | { tipo: "cubo"; i: number; j: number; wi: number; wj: number; alto: number; mat: keyof typeof MATERIALES; base?: number }
-  | { tipo: "sprite"; sprite: Sprite; i: number; j: number; escala?: number; espejo?: boolean; sube?: number; sombra?: boolean }
+  | {
+      tipo: "sprite";
+      sprite: Sprite;
+      i: number;
+      j: number;
+      escala?: number;
+      espejo?: boolean;
+      sube?: number;
+      sombra?: boolean;
+      /** Cambia entradas de la paleta: la misma persona con otra camisa es otra persona. */
+      recolor?: Record<string, string>;
+    }
   | { tipo: "tapete"; i: number; j: number; wi: number; wj: number; color: string };
 
 export type Habitacion = {
@@ -113,7 +124,8 @@ export const dibujarHabitacion = (g: Rejilla, c: Camara, hab: Habitacion): void 
       const [x, yBase] = aPantalla(c, m.i + 0.5, m.j + 0.5);
       const pies = yBase + th(c) * 0.25 - (m.sube ?? 0);
       if (m.sombra !== false) sombraPie(g, x, pies, c, oscurecer(hab.pisoA));
-      estampar(g, m.sprite, x, pies, m.escala ?? 1, m.espejo);
+      const sp = m.recolor ? { lineas: m.sprite.lineas, paleta: { ...m.sprite.paleta, ...m.recolor } } : m.sprite;
+      estampar(g, sp, x, pies, m.escala ?? 1, m.espejo);
     }
   }
 };

@@ -66,13 +66,18 @@ export type Camara = {
   /** Origen en pantalla del vértice superior de la baldosa (0,0). */
   ox: number;
   oy: number;
+  /**
+   * Voltea el eje x: se ve el MISMO cuarto desde el otro lado, con las paredes cambiadas de
+   * lado. Es la manera barata de tener dos puntos de vista distintos sin rehacer la escena.
+   */
+  espejo?: boolean;
 };
 
 export const th = (c: Camara): number => c.tw / 2;
 
 /** Pasa coordenada de mundo (i, j, altura z en píxeles) a pantalla. */
 export const aPantalla = (c: Camara, i: number, j: number, z = 0): [number, number] => [
-  c.ox + (i - j) * (c.tw / 2),
+  c.ox + (i - j) * (c.tw / 2) * (c.espejo ? -1 : 1),
   c.oy + (i + j) * (th(c) / 2) - z,
 ];
 
@@ -105,11 +110,14 @@ export const cubo = (
   wi: number,
   wj: number,
   alto: number,
-  t: Tonos,
+  tono: Tonos,
   base = 0,
 ): void => {
   const zTop = base + alto;
   const P = (ii: number, jj: number, z: number) => aPantalla(c, ii, jj, z);
+  // con espejo, la cara que queda a la izquierda EN PANTALLA es la otra: se cambian los tonos
+  // para que la luz siga viniendo del mismo sitio y los muebles no se vean iluminados al revés.
+  const t = c.espejo ? { top: tono.top, izq: tono.der, der: tono.izq } : tono;
   // cara derecha (mira hacia abajo-derecha): el plano i = i+wi
   poligono(g, [P(i + wi, j, zTop), P(i + wi, j + wj, zTop), P(i + wi, j + wj, base), P(i + wi, j, base)], t.der);
   // cara izquierda (mira hacia abajo-izquierda): el plano j = j+wj
