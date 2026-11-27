@@ -1,21 +1,20 @@
 # Psicología y estatus
 
-Reglas de venta elegante, de alto estatus. Nunca sonar a vendedor desesperado.
+Reglas de venta elegante y de alto estatus para cerrar clientes reales sin sonar jamás a vendedor necesitado.
 
 ## Prohibido
-- Rogar, perseguir, insistir después de un "no" o un silencio claro.
-- Escasez falsa ("solo quedan 2 cupos" si no es cierto).
-- Adjetivos vacíos: "excelente calidad", "el mejor servicio", "resultados garantizados" sin prueba.
-- Sonar a call center: tono de script, exceso de cortesía forzada ("¡Buenas tardes estimado cliente!").
+- Rogar, perseguir o reclamar silencio ("te escribí hace días y no recibí respuesta").
+- Escasez falsa ("solo me quedan 2 cupos").
+- Adjetivos vacíos: "excelente calidad", "el mejor servicio", "resultados garantizados", "alta precisión".
+- Tono de call center o exageradamente servil ("¡Buenas tardes estimado cliente!", "sería un placer poder agendar una reunión de descubrimiento").
+- Pedir una reunión de 30 minutos en el primer correo en frío: un desconocido ocupado casi nunca acepta una llamada sin ver valor primero.
 
 ## Obligatorio
-- Hablar de tú a tú, con seguridad tranquila. El que ofrece el servicio no necesita convencer a gritos.
-- Vender con pruebas concretas: un ejemplo real, un número, un antes/después — nunca una afirmación sin respaldo.
-- Identificar la duda silenciosa #1 del lead antes de pedir el pago:
-  - Miedo a estafa (no conoce a quien le vende) → mostrar trabajo real, referencias, forma de pago segura.
-  - Miedo al precio (cree que no puede pagarlo) → anclar con el costo de NO resolver el problema.
-  - Miedo a que no sirva (ya lo intentó con otro y falló) → mostrar el proceso y qué lo hace distinto.
-- Desarmar esa duda con elegancia, sin que el lead sienta que lo están manejando.
-
-## El tono correcto
-Es el de alguien que ya tiene suficiente trabajo y clientes contentos — no el de alguien necesitando el cierre.
+- **Estatus de par (colega a colega):** escribes como alguien ocupado que resuelve problemas reales en Medellín y vio una oportunidad concreta en su negocio — no como alguien buscando que le den trabajo.
+- **Bajar la fricción al mínimo:** en el primer correo busca una respuesta corta de 1 línea ("sí, muéstrame", "dale, te paso una foto", "escríbeme por WhatsApp"), NO una videollamada ni que redacten un ensayo explicando toda su operación.
+- **Dar salida elegante:** cerrar con algo relajado tipo "si ahorita no están en eso, cero lío" o "si no les aplica, me dices y no molesto" aumenta drásticamente la confianza y las respuestas porque quita la presión de venta.
+- **Vender con evidencia concreta (sin cifras):** menciona un caso real cualitativo (ej. sistema que arma historias automáticas para un bar, marca de gorras armada desde cero, gestión INVIMA de una marca de guacamole) u ofrece mostrar un ejemplo real antes de hablar de contratar nada.
+- **Desarmar la duda silenciosa #1** cuando respondan:
+  - Miedo a que no sirva → mostrar ejemplo real o prueba pequeña.
+  - Miedo al precio → entender bien el alcance primero y pasar el caso a Raymond para cotizar claro, sin sorpresas.
+  - Miedo a perder tiempo → demostrar desde el primer correo que eres breve, claro y resuelves sin vueltas.

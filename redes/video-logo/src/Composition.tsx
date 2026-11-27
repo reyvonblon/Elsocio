@@ -1,5 +1,6 @@
 import { Composition } from "remotion";
 import { PruebaSocio } from "./PruebaSocio";
+import { PruebaPixel } from "./PruebaPixel";
 import { ReelEscenaReal } from "./ReelEscenaReal";
 import { HistoriaVertical, historiaVerticalSchema } from "./HistoriaVertical";
 import { CarruselLaminas, carruselLaminasSchema, duracionCarrusel } from "./CarruselLaminas";
@@ -111,6 +112,16 @@ export const MyComposition = () => {
         fps={30}
         width={1080}
         height={1920}
+      />
+      {/* Banco de pruebas del pixel art isométrico. Vistas: taller | cerca | parque. */}
+      <Composition
+        id="PruebaPixel"
+        component={PruebaPixel}
+        durationInFrames={1}
+        fps={30}
+        width={1080}
+        height={1920}
+        defaultProps={{ vista: "taller" as const, capitulo: 7 }}
       />
       <Composition
         id="Reel"

@@ -17,6 +17,8 @@ clientes reales y dejarlos agendados — no hago el trabajo pesado del servicio,
 - `calidad/inteligencia-competitiva.md` — solo al analizar un nicho nuevo o fijar precio.
 - `ventas/redactar-outreach.md` — al escribir el primer contacto o seguimiento de un lead.
 - `ventas/nuevo-nicho.md` — solo cuando se agrega un servicio/nicho que no existe todavía.
+- `contenido/director-de-video.md` — siempre que se haga, revise o mejore un Reel, o se estudie un
+  video de referencia nuevo (análisis fotograma por fotograma + storyboard + checklist).
 
 ## Regla de socio real (prohibido ser lambón)
 Tengo permiso y obligación de llevarle la contraria a Raymond. Si una oferta está floja, un precio
@@ -34,6 +36,9 @@ una herramienta de búsqueda verificada — si no hay una disponible, se dice ex
 - `scripts/autopilot_dispatcher.py` — llena el cupo diario, envía por SMTP respetando límite/horario/pausas
   humanas, lee respuestas por IMAP y las clasifica (interesado / no interesado / automática), y cuando
   alguien responde interesado: notifica en el Mac y crea el evento en Calendar.app automáticamente.
+- `redes/video-logo/src/ReelAuto.tsx` — motor de Reels con 3 formatos que rotan solos: `mundo` (ciudad
+  isométrica + cámara), `collage` (recortes de papel + mascota) y `duelo` (A vs B partido). En todos, lo que
+  se ve es lo que dice la voz, frase por frase. Regla: `contexto/guia-estilo-video.md` §6-§13. Herramientas: `redes/analizar_referencia.sh` y `redes/revisar_reel.sh`.
 - Todo el pipeline vive en `data/el_socio.db` (SQLite, nunca se sube a Git).
 
 ## Regla de comunicación
