@@ -82,8 +82,11 @@ export const PALABRAS_NICHO: Record<NombreNicho, RegExp> = {
 };
 
 
-export const PALABRAS_LADO_B = /\b(el otro|la otra|otro|otra recibe|nosotros|el socio|con un|con una|sistema|ahora|resuelto|listo|exact|sin adivinar|sin sorpresas|primero|luego|despues)\b/;
-export const PALABRAS_LADO_A = /\b(uno|una recibe|sin sistema|adivina|a ciegas|otra vez|nadie|perdiste|tarde|nunca|hoy|antes)\b/;
+// El lado B es el negocio que ya tiene sistema. "tu socio"/"su socio" estaban fuera de la lista
+// y el cerebro escribe justamente "Con tu Socio": por eso frases de solución caían en el lado del
+// caos, con pared fría y rótulo negativo ("Con tu Socio, ves el espacio terminado" → TODO A MANO).
+export const PALABRAS_LADO_B = /\b(el otro|la otra|otro|otra recibe|nosotros|el socio|tu socio|su socio|al otro|en el otro|ese taller|esa tienda|ese local|esa agencia|ese estudio|con un|con una|sistema|herramienta|ahora|resuelto|queda listo|listo|exact|sin adivinar|sin sorpresas|sin mover|resultado|ya habias visto|primero|luego|despues)\b/;
+export const PALABRAS_LADO_A = /\b(uno|una recibe|sin sistema|adivina|interpreta|a su manera|a ciegas|a mano|otra vez|rehacer|tumbar|reproceso|nadie|perdiste|tarde|nunca|hoy|espera|no vuelven)\b/;
 
 export const ARTICULO: Record<NombreNicho, string> = { taller: "el", obra: "el", estudio: "la", oficina: "la" };
 export const LINEA_MARCA = "Con El Socio, te lo solucionamos.";
@@ -140,8 +143,13 @@ export const ladoDe = (seg: Segmento, nBloques: number, explicito?: Lado): Lado 
   const t = normalizar(seg.texto);
   if (seg.tipo === "gancho") return "A";
   if (seg.tipo === "cierre") return /\bA\b/.test(seg.texto) && !/\bB\b/.test(seg.texto) ? "A" : "B";
-  if (PALABRAS_LADO_B.test(t) && !PALABRAS_LADO_A.test(t)) return "B";
-  if (PALABRAS_LADO_A.test(t) && !PALABRAS_LADO_B.test(t)) return "A";
+  // Antes se exigía exclusividad: una frase con palabras de los dos lados ("Con tu Socio ... antes
+  // de romper una pared") no contaba para ninguno y caía al reparto por posición. Ahora gana el
+  // lado que más señales tenga, y la posición solo decide los empates de verdad.
+  const cuenta = (re: RegExp) => (t.match(new RegExp(re.source, "g")) || []).length;
+  const nB = cuenta(PALABRAS_LADO_B);
+  const nA = cuenta(PALABRAS_LADO_A);
+  if (nB !== nA) return nB > nA ? "B" : "A";
   return seg.indice - 1 < Math.max(1, Math.floor(nBloques / 2)) ? "A" : "B";
 };
 

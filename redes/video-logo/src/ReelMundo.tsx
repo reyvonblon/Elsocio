@@ -55,27 +55,39 @@ const FOCO_POR_PALABRA: Record<NombreNicho, [RegExp, string][]> = {
   obra: [
     [/pared|romper|muro|demol/, "pared"],
     [/plano|medida|diseno|idea|referencia/, "plano"],
-    [/render|ver antes|ves antes|terminad|listo|asi se ve|quedar/, "sala"],
+    // "quedar" no casaba con "queda" ni con "cómo queda": el gancho se iba sin foco.
+    [/render|ver antes|ves antes|terminad|listo|asi se ve|qued|construye|ciegas|vio|imagin/, "sala"],
     [/sala|mueble|sofa|decor/, "sofa"],
     [/obra|maestro|remodel|andamio|gast/, "andamio"],
     [/cable|electric|sorpresa|reproceso/, "cables"],
     [/luz|ventana/, "ventana"],
   ],
   estudio: [
-    [/inventario|esperando|caja|bodega|sin foto/, "inventario"],
     [/catalogo|tienda online|publica|web|instagram/, "pantalla"],
+    [/inventario|esperando|caja|bodega|sin foto|stock|mueve/, "inventario"],
+    [/semana|dias|espera|demora|lanzamiento|tarde/, "inventario"],
     [/luz|estudio|profesional/, "luces"],
     [/celular|telefono|flash/, "celular"],
     [/foto|camara|sesion/, "camara"],
     [/producto|prenda|bolso|zapato/, "producto"],
     [/ropa|modelo/, "ropa"],
   ],
+  // Oficina tenía 5 reglas contra las 9 de taller, y tres de sus anclas (escritorio, calendario,
+  // correo) no las alcanzaba ninguna palabra: por eso los reels de agencia caían en "centro"
+  // (5 de 7 planos en el id 10) y se veían todos iguales.
   oficina: [
     [/agenda|reunion|cita|calendario|agendad/, "agenda"],
-    [/correo|email|bandeja|responde|mensaje|lead/, "pantalla"],
-    [/llamada|telefono|whatsapp/, "telefono"],
-    [/papel|excel|manual|olvid|seguimiento/, "papeles"],
-    [/tiempo|cansad|solo|tu |dueno/, "persona"],
+    // El orden importa: "un sistema arma esos reportes solo" es una PANTALLA, no los papeles que
+    // menciona de paso. Lo específico del medio va antes que lo genérico.
+    [/pantalla|sistema|automat|panel|herramienta|software|solo|listo|resultado/, "pantalla"],
+    [/correo|email|bandeja|propuesta|escribe|responde|respuesta/, "correo"],
+    [/filtra|separa|califica|prospecto|lead|encajan|cerrar|cliente/, "correo"],
+    [/excel|celda|copia|pega|formulario|reporte|informe|dato|planilla/, "papeles"],
+    [/hora|tiempo|tarde|dias|semana|espera|vuelven|quinta vez/, "calendario"],
+    [/escritorio|oficina|puesto|mesa/, "escritorio"],
+    [/llamada|telefono|whatsapp|celular/, "telefono"],
+    [/papel|manual|olvid|seguimiento|a mano|tarea|proceso/, "papeles"],
+    [/equipo|disenador|empleado|alguien|persona|dueno|cansad|trabaja|factura/, "persona"],
   ],
 };
 
@@ -107,11 +119,15 @@ export type PlanoResuelto = {
 };
 
 
-export const deducirFoco = (nicho: NombreNicho, texto: string): string | null => {
+/** Todos los focos que la frase sugiere, en orden de fuerza (el primero es el más literal). */
+export const focosDeFrase = (nicho: NombreNicho, texto: string): string[] => {
   const t = normalizar(texto);
-  for (const [re, foco] of FOCO_POR_PALABRA[nicho]) if (re.test(t)) return foco;
-  return null;
+  const salida: string[] = [];
+  for (const [re, foco] of FOCO_POR_PALABRA[nicho]) if (re.test(t) && !salida.includes(foco)) salida.push(foco);
+  return salida;
 };
+
+export const deducirFoco = (nicho: NombreNicho, texto: string): string | null => focosDeFrase(nicho, texto)[0] ?? null;
 
 export const resolverPlanos = (props: Props, duracionSeg: number): PlanoResuelto[] => {
   const { bloques = [], etiquetas = [], planos = [] } = props;
@@ -129,9 +145,14 @@ export const resolverPlanos = (props: Props, duracionSeg: number): PlanoResuelto
     // Lado A (sin sistema) o B (con El Socio)
     const lado: Lado = ladoDe(seg, bloques.length, entrada.lado);
 
-    const focoPalabra = deducirFoco(nicho, seg.texto);
+    const sugeridos = focosDeFrase(nicho, seg.texto).filter((f) => ANCLAS[nicho][f]);
     const focoValido = (f?: string) => (f && ANCLAS[nicho][f] ? f : null);
-    const foco = focoValido(entrada.foco) ?? focoPalabra ?? "centro";
+    // El gancho es el primer segundo del reel: dejarlo en "centro" (un plano general sin nada que
+    // mirar) es desperdiciarlo. Si la frase no da un foco, se toma el primero del nicho.
+    const porDefecto = seg.tipo === "gancho"
+      ? Object.keys(ANCLAS[nicho]).find((k) => k !== "centro") ?? "centro"
+      : "centro";
+    const foco = focoValido(entrada.foco) ?? sugeridos[0] ?? porDefecto;
 
     // Toma: el gancho abre en la ciudad, el cierre se aleja a la pareja de locales.
     let toma: Toma;
@@ -146,11 +167,15 @@ export const resolverPlanos = (props: Props, duracionSeg: number): PlanoResuelto
 
     // Regla de variedad: dos planos seguidos nunca repiten encuadre.
     if (anterior && anterior.toma === toma && anterior.lado === lado && anterior.foco === foco) {
-      const otros = Object.keys(ANCLAS[nicho]).filter((k) => k !== foco && k !== "centro");
+      // Antes se tomaba un ancla por índice (`otros[(i*3) % n]`), sin mirar la frase: el mismo
+      // defecto que metía un reloj en un reel de fotos. Primero lo que la propia frase sugiera.
+      const otros = sugeridos.filter((f) => f !== foco).concat(
+        Object.keys(ANCLAS[nicho]).filter((k) => k !== foco && k !== "centro"),
+      );
       if (toma === "detalle") toma = "local";
       else if (otros.length) {
         toma = "detalle";
-        return finalizar(otros[(i * 3) % otros.length]);
+        return finalizar(otros[0]);
       }
     }
     return finalizar(foco);

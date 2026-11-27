@@ -5,6 +5,7 @@ import {
   FUENTE, NOMBRE_LOTE, SAFE_BOTTOM, SAFE_TOP, TarjetaMarca, ladoDe, normalizar, palabraClave, segmentoEn, segmentosReel, tiemposPalabras,
   type Lado, type PlanoEntrada, type PropsReel, type Segmento,
 } from "./comun";
+import type { NombreNicho } from "./mundo/interiores";
 
 /**
  * ReelCollage — formato "recortes de papel" (aprendido del reel "Harvey, un vendedor con IA").
@@ -30,9 +31,72 @@ const MADERA = "#6e4326";
 
 export const OBJETOS_COLLAGE = [
   "iman", "pecera", "diana", "clasificadora", "tostadora", "embudo", "agenda", "reloj", "papeles",
-  "telefono", "etiqueta", "pantalla", "ficha", "plano", "camara", "cajas", "maquina",
+  "telefono", "etiqueta", "pantalla", "ficha", "plano", "camara", "cajas", "maquina", "producto",
 ] as const;
 export type Objeto = (typeof OBJETOS_COLLAGE)[number];
+
+/**
+ * Qué objetos existen DIBUJADOS para cada nicho y lado. Antes esta lista no existía: los 17
+ * objetos valían para los cuatro nichos, así que un guion de catálogo visual no tenía con qué
+ * ilustrarse y el motor caía al genérico. Medido sobre los 6 reels ya escritos: 66% de los
+ * planos terminaban en `papeles` o `pantalla`, los mismos dos dibujos en todos los nichos.
+ * `maquina` es una máquina de COSER: solo taller. `camara` saca fotos de catálogo: solo estudio.
+ */
+const OBJETOS_POR_NICHO: Record<NombreNicho, Record<Lado, Objeto[]>> = {
+  taller: { A: ["ficha", "cajas", "maquina", "papeles", "telefono", "reloj"], B: ["ficha", "maquina", "cajas", "pantalla", "agenda"] },
+  obra: { A: ["plano", "papeles", "reloj", "telefono"], B: ["plano", "pantalla", "agenda", "etiqueta"] },
+  estudio: { A: ["producto", "camara", "cajas", "papeles", "telefono", "reloj"], B: ["producto", "camara", "cajas", "pantalla", "agenda"] },
+  oficina: { A: ["papeles", "telefono", "reloj", "cajas"], B: ["pantalla", "agenda", "clasificadora", "embudo", "tostadora", "diana", "pecera", "iman"] },
+};
+
+/**
+ * Palabras del NICHO primero: el mismo sustantivo pesa distinto según el negocio ("caja" en una
+ * tienda es inventario, en un taller es el lote que se devuelve). Se consultan antes que las
+ * genéricas de abajo, que siguen cubriendo el embudo de ventas de El Socio.
+ */
+const PALABRA_POR_NICHO: Record<NombreNicho, [RegExp, Objeto][]> = {
+  taller: [
+    [/ficha|medida|patron|talle|ajustad|acabado|especificac|exact/, "ficha"],
+    [/cose|costur|confeccion|maquina|produccion|puntada|hilo/, "maquina"],
+    [/lote|pedido|entrega|devuel|caja|despacho|prenda|coleccion|tela|diseno/, "cajas"],
+    [/audio|whatsapp|llamada|telefono|nota de voz|mensaje|celular/, "telefono"],
+    [/adivina|interpreta|a su manera|a mano|papel|cuaderno|ciegas|duda|desorden/, "papeles"],
+    [/semana|dias|reproceso|espera|rehacer|otra vez|tiempo|tarde/, "reloj"],
+  ],
+  obra: [
+    [/render|plano|espacio|remodel|obra|terminado|antes de|lo ves|visto|ver/, "plano"],
+    [/pared|ladrillo|meson|mueble|piso|color|tumbar|romper|demoler|andamio|luz/, "plano"],
+    [/pantalla|sistema|ajusta|panel|socio|solo/, "pantalla"],
+    [/muestra|material|referencia|catalogo/, "etiqueta"],
+    [/imagina|ciegas|a mano|papel|sorpresa|reproceso|chiquita/, "papeles"],
+    [/semana|dias|espera|volver a|otra vez|tiempo|tarde/, "reloj"],
+  ],
+  estudio: [
+    // El tiempo va primero: "el lanzamiento espera semanas" es un reloj, no una cámara.
+    [/semana|dias|espera|demora|tarde|tiempo|nunca/, "reloj"],
+    // El sujeto manda sobre la herramienta: si la frase habla del PRODUCTO, se ve el producto,
+    // no la cámara con que se fotografía (ese fue el reparo de Raymond sobre el gancho del id 7).
+    [/producto|articulo|prenda|referencia|vende|venden|mira|nadie|estrella/, "producto"],
+    [/foto|sesion|luz|luces|imagen|estudio|camara|catalogo|publica/, "camara"],
+    [/inventario|bodega|stock|despacho|pedido|lote/, "cajas"],
+    [/celular|whatsapp|audio|llamada|telefono/, "telefono"],
+    [/prestad|afan|a mano|papel/, "papeles"],
+    [/sistema|automat|panel|socio|solo/, "pantalla"],
+  ],
+  oficina: [
+    [/agenda|reunion|cita|calendario|agendad/, "agenda"],
+    [/correo|email|propuesta|escribe|mensaje a medida/, "tostadora"],
+    [/seguimiento|respuesta|responde|insiste|recordatorio/, "embudo"],
+    [/separa|filtra|califica|encajan|interesad|prospecto/, "clasificadora"],
+    [/ideal|a quien|nicho|apunta|objetivo/, "diana"],
+    [/busca|encuentra|leads|desconocid/, "pecera"],
+    [/atrae|trae|llegan|clientes nuevos|mas clientes/, "iman"],
+    [/excel|celda|copia|pega|formulario|reporte|informe|dato|manual|papel|a mano/, "papeles"],
+    [/hora|tarde|dias|semana|espera|reproceso|quinta vez|no vuelven|tiempo/, "reloj"],
+    [/audio|whatsapp|llamada|telefono|celular/, "telefono"],
+    [/sistema|automat|panel|herramienta|socio|solo|listo/, "pantalla"],
+  ],
+};
 
 const OBJETO_POR_PALABRA: [RegExp, Objeto][] = [
   [/se llama|presento|conoce a|te presento/, "etiqueta"],
@@ -54,46 +118,90 @@ const OBJETO_POR_PALABRA: [RegExp, Objeto][] = [
   [/sistema|automat|panel|solo|inteligencia|socio/, "pantalla"],
 ];
 
-const ROTULO_OBJETO: Record<Objeto, string> = {
-  iman: "TRAE CLIENTES",
-  pecera: "ENCUENTRA CLIENTES",
-  diana: "TU CLIENTE IDEAL",
-  clasificadora: "SEPARA LOS QUE ENCAJAN",
-  tostadora: "CORREOS A MEDIDA",
-  embudo: "SEGUIMIENTO",
-  agenda: "AGENDA LLENA",
-  reloj: "TIEMPO PERDIDO",
-  papeles: "TODO A MANO",
-  telefono: "MENSAJES SUELTOS",
-  etiqueta: "TE PRESENTO",
-  pantalla: "TRABAJA SOLO",
-  ficha: "FICHA EXACTA",
-  plano: "LO VES ANTES",
-  camara: "CATÁLOGO LISTO",
-  cajas: "EL PEDIDO",
-  maquina: "PRODUCCIÓN",
+/**
+ * El rótulo cambia con el LADO, no el dibujo. Esto arregla de raíz lo que el primer render
+ * destapó: la voz decía "el patronista adivina medidas" y salía una ficha rotulada "FICHA
+ * EXACTA". La respuesta de entonces fue degradar la ficha a una hoja de papel en el lado A —
+ * y por eso 2 de cada 3 planos acabaron siendo el mismo papel o la misma pantalla. El dibujo
+ * de la ficha YA se dibuja distinto en A (con un "?" rojo grande en vez de los ✓); lo único
+ * que contaba lo contrario de la frase era el texto de la cinta.
+ */
+const ROTULO_OBJETO: Record<Objeto, Record<Lado, string>> = {
+  iman: { A: "NADIE LLEGA", B: "TRAE CLIENTES" },
+  pecera: { A: "A VER QUIÉN CAE", B: "ENCUENTRA CLIENTES" },
+  diana: { A: "DISPARA A TODO", B: "TU CLIENTE IDEAL" },
+  clasificadora: { A: "TODO REVUELTO", B: "SEPARA LOS QUE ENCAJAN" },
+  tostadora: { A: "EL MISMO COPIADO", B: "CORREOS A MEDIDA" },
+  embudo: { A: "SE ENFRÍA SOLO", B: "SEGUIMIENTO" },
+  agenda: { A: "AGENDA VACÍA", B: "AGENDA LLENA" },
+  reloj: { A: "TIEMPO PERDIDO", B: "TIEMPO QUE VUELVE" },
+  papeles: { A: "TODO A MANO", B: "TODO A MANO" },
+  telefono: { A: "MENSAJES SUELTOS", B: "MENSAJES SUELTOS" },
+  etiqueta: { A: "TE PRESENTO", B: "TE PRESENTO" },
+  pantalla: { A: "TRABAJA SOLO", B: "TRABAJA SOLO" },
+  ficha: { A: "A OJO", B: "FICHA EXACTA" },
+  plano: { A: "¿Y SI NO QUEDA?", B: "LO VES ANTES" },
+  camara: { A: "CADA FOTO DISTINTA", B: "CATÁLOGO LISTO" },
+  cajas: { A: "EL LOTE DEVUELTO", B: "EL PEDIDO LISTO" },
+  maquina: { A: "ADIVINANDO", B: "PRODUCCIÓN" },
+  producto: { A: "NADIE LO MIRA", B: "SE VENDE SOLO" },
 };
 
 /**
- * Objetos que solo existen cuando el negocio YA tiene sistema. Si la frase es del lado A
- * (el que todavía adivina), se cambian por su versión en caos: si no, pasa lo que salió en el
- * primer render real — la voz decía "el patronista adivina medidas" y en pantalla aparecía una
- * ficha exacta con el rótulo "FICHA EXACTA", justo lo contrario de lo que se está contando.
+ * Solo los objetos que NO saben dibujarse en caos. Los otros ocho (ficha, plano, cajas, maquina,
+ * camara, agenda, reloj, telefono) ya cambian de aspecto según el lado dentro de `ObjetoPapel`,
+ * así que degradarlos era tirar a la basura el dibujo bueno y repetir el papel de siempre.
  */
 const EQUIVALENTE_EN_CAOS: Partial<Record<Objeto, Objeto>> = {
-  ficha: "papeles",
-  agenda: "reloj",
   pantalla: "papeles",
   clasificadora: "papeles",
   tostadora: "telefono",
-  plano: "papeles",
-  camara: "telefono",
+  embudo: "papeles",
+  iman: "papeles",
+  pecera: "papeles",
+  diana: "papeles",
+  etiqueta: "papeles",
 };
 
-export const deducirObjeto = (texto: string, lado: Lado): Objeto => {
+/** Un objeto de "ya tiene sistema" en el lado del caos cuenta lo contrario de la frase. */
+const enLado = (o: Objeto, lado: Lado): Objeto => (lado === "A" ? EQUIVALENTE_EN_CAOS[o] ?? o : o);
+
+/**
+ * Todos los objetos que la frase sugiere, en orden de fuerza. Devolver la lista (y no solo el
+ * primero) es lo que permite resolver una repetición sin perder el sentido: si la frase da dos
+ * sustantivos y el primero ya salió en el plano anterior, se usa el segundo que ELLA dice, en vez
+ * de rotar a ciegas por el nicho (que fue como una agenda acabó en un reel de remodelación).
+ */
+const candidatosObjeto = (texto: string, lado: Lado, nicho: NombreNicho): Objeto[] => {
   const t = normalizar(texto);
-  for (const [re, o] of OBJETO_POR_PALABRA) if (re.test(t)) return lado === "A" ? EQUIVALENTE_EN_CAOS[o] ?? o : o;
-  return lado === "A" ? "papeles" : "pantalla";
+  const vistos = new Set<Objeto>();
+  const salida: Objeto[] = [];
+  const empujar = (o: Objeto) => {
+    const f = enLado(o, lado);
+    // `papeles` ES el dibujo del caos: en el lado que ya tiene sistema contradice la frase.
+    const fin = lado === "B" && f === "papeles" ? OBJETOS_POR_NICHO[nicho].B[0] : f;
+    if (!vistos.has(fin)) { vistos.add(fin); salida.push(fin); }
+  };
+  for (const [re, o] of PALABRA_POR_NICHO[nicho]) if (re.test(t)) empujar(o);
+  for (const [re, o] of OBJETO_POR_PALABRA) if (re.test(t)) empujar(o);
+  // Sin palabra que agarrar, los del nicho son mejores que el papel genérico de antes.
+  for (const o of OBJETOS_POR_NICHO[nicho][lado]) empujar(o);
+  return salida;
+};
+
+export const deducirObjeto = (texto: string, lado: Lado, nicho: NombreNicho = "oficina"): Objeto =>
+  candidatosObjeto(texto, lado, nicho)[0];
+
+/**
+ * Dos planos seguidos con el mismo dibujo: antes se forzaba `reloj` o `papeles` sin mirar el
+ * nicho ni la frase (de ahí el reloj que salió en un reel de fotos de producto, con el rótulo
+ * "INVENTARIO MOVIDO" encima). Ahora se toma el siguiente objeto que ESE nicho tiene dibujado
+ * para ESE lado, prefiriendo uno que no haya salido todavía en el reel.
+ */
+const siguienteDelNicho = (nicho: NombreNicho, lado: Lado, evitar: Objeto, usados: Set<Objeto>): Objeto => {
+  const pool = OBJETOS_POR_NICHO[nicho][lado].filter((o) => o !== evitar);
+  if (!pool.length) return evitar;
+  return pool.find((o) => !usados.has(o)) ?? pool[0];
 };
 
 type PlanoCollage = Segmento & { lado: Lado; objeto: Objeto; rotulo: string; pared: string };
@@ -102,19 +210,38 @@ export const resolverCollage = (props: PropsReel, duracionSeg: number): { planos
   const { nicho, segmentos } = segmentosReel(props, duracionSeg);
   const entradas: PlanoEntrada[] = props.planos || [];
   let anterior: Objeto | null = null;
+  let ladoAnterior: Lado | null = null;
   let iA = 0;
   let iB = 0;
+  const usados = new Set<Objeto>();
   const planos = segmentos.map((seg) => {
-    const e = entradas[seg.indice] || {};
+    // Los planos del cerebro son SOLO para el cuerpo. El cierre lo arma el código en tres golpes
+    // y el cerebro no los cuenta: su último plano caía encima del primero ("No seas la Tienda A"
+    // salía en el lado B, rotulada TIENDA B) porque las entradas se indexan por segmento.
+    const e: PlanoEntrada = seg.tipo === "cierre" ? {} : entradas[seg.indice] || {};
     const lado = ladoDe(seg, props.bloques.length, e.lado as Lado | undefined);
-    let objeto = (OBJETOS_COLLAGE as readonly string[]).includes(e.objeto || "") ? (e.objeto as Objeto) : deducirObjeto(seg.texto, lado);
+    const pedido = (OBJETOS_COLLAGE as readonly string[]).includes(e.objeto || "") ? (e.objeto as Objeto) : null;
+    const candidatos = candidatosObjeto(seg.texto, lado, nicho);
+    let objeto = pedido ? enLado(pedido, lado) : candidatos[0];
     if (seg.tipo === "cierre") objeto = lado === "A" ? "papeles" : "pantalla";
-    if (objeto === anterior && seg.tipo === "bloque") objeto = lado === "A" ? (objeto === "reloj" ? "papeles" : "reloj") : objeto === "pantalla" ? "agenda" : "pantalla";
+    else if (objeto === anterior && ladoAnterior === lado) {
+      // Solo dentro del mismo lado: el mismo objeto en A y luego en B es el contraste que cuenta
+      // el reel (la ficha a ojo y la ficha exacta), no una repetición que haya que romper.
+      // Primero lo que la frase misma ofrezca; el pool del nicho es el último recurso.
+      objeto = candidatos.find((o) => o !== anterior && !usados.has(o))
+        ?? candidatos.find((o) => o !== anterior)
+        ?? siguienteDelNicho(nicho, lado, objeto, usados);
+    }
     anterior = objeto;
+    ladoAnterior = lado;
+    usados.add(objeto);
     const pared = lado === "A" ? PAREDES_A[iA++ % PAREDES_A.length] : PAREDES_B[iB++ % PAREDES_B.length];
+    // Si el objeto final no es el que pidió el cerebro, su tooltip describe un dibujo que ya no
+    // está: manda el rótulo del objeto que de verdad se ve.
+    const tooltip = pedido && objeto !== pedido ? "" : (e.tooltip || "").trim().toUpperCase();
     const rotulo = seg.tipo === "cierre"
       ? `${NOMBRE_LOTE[nicho].toUpperCase()} ${lado}`
-      : (e.tooltip || "").trim().toUpperCase() || ROTULO_OBJETO[objeto];
+      : tooltip || ROTULO_OBJETO[objeto][lado];
     return { ...seg, lado, objeto, rotulo: rotulo.replace(/[0-9$%]/g, "").slice(0, 26), pared };
   });
   return { planos, nombre: NOMBRE_LOTE[nicho] };
@@ -139,7 +266,7 @@ const Pared: React.FC<{ color: string }> = ({ color }) => {
 };
 
 const Piso: React.FC = () => (
-  <div style={{ position: "absolute", left: 0, right: 0, top: 1240, bottom: 0, overflow: "hidden" }}>
+  <div style={{ position: "absolute", left: 0, right: 0, top: 1390, bottom: 0, overflow: "hidden" }}>
     <svg width={1080} height={700} style={{ position: "absolute", top: -18 }}>
       <path
         d={`M 0 30 ${Array.from({ length: 28 }).map((_, i) => `L ${i * 40 + 20} ${i % 2 ? 22 : 34}`).join(" ")} L 1080 28 L 1080 700 L 0 700 Z`}
@@ -517,6 +644,38 @@ const ObjetoPapel: React.FC<{ objeto: Objeto; k: number; lado: Lado }> = ({ obje
         </Recorte>
       );
     }
+    case "producto": {
+      const alza = sube(6);
+      const destello = Math.abs(Math.sin(k * 0.08));
+      return (
+        <Recorte>
+          {/* Tarima: dorada cuando el producto está bien presentado, piedra apagada cuando no. */}
+          <ellipse cx={300} cy={505} rx={205} ry={46} fill={lado === "B" ? "#d9a441" : "#6b6760"} />
+          {lado === "B" ? (
+            <path d={`M 300 30 L ${300 - 170 * alza} 480 L ${300 + 170 * alza} 480 Z`} fill="rgba(255,243,214,0.45)" stroke="none" />
+          ) : null}
+          <g transform={`translate(300 ${lado === "B" ? 322 - alza * 16 : 352}) rotate(${lado === "B" ? 0 : -15})`}>
+            <rect x={-92} y={-126} width={184} height={248} rx={20} fill={lado === "B" ? MUNDO.vino : "#8e8a84"} />
+            <rect x={-92} y={-34} width={184} height={58} fill={PAPEL} />
+            <rect x={-46} y={-166} width={92} height={46} rx={12} fill={lado === "B" ? "#d9a441" : "#75716b"} />
+            {lado === "B" ? <circle cx={52} cy={-78} r={14 + destello * 7} fill="#fff6d8" stroke="none" /> : null}
+          </g>
+          {/* Quién lo mira: tres clientes de frente, o una sola espalda que se va. */}
+          {lado === "B" ? (
+            [0, 1, 2].map((i) => (
+              <g key={i} transform={`translate(0 ${-sube(10 + i * 5) * 8})`}>
+                <Persona2D x={[75, 300, 525][i]} y={556} c={["#3f5163", "#5f7a5c", "#6c5a7d"][i]} s={1} />
+              </g>
+            ))
+          ) : (
+            <g opacity={0.6} transform={`translate(${470 + osc * 6} 0)`}>
+              <rect x={-20} y={560} width={40} height={44} rx={12} fill="#5f5b55" />
+              <circle cx={0} cy={538} r={18} fill="#b9a893" />
+            </g>
+          )}
+        </Recorte>
+      );
+    }
     case "camara":
     default: {
       const flash = lado === "A" ? k % 30 < 4 : false;
@@ -587,6 +746,20 @@ const Mascota: React.FC<{ frame: number; lado: Lado; k: number }> = ({ frame, la
 
 // ------------------------------------------------------------------ rótulo, contador, karaoke
 
+/**
+ * El cartel del gancho tenía 64 px fijos y crecía hacia abajo hasta chocar con el objeto: con un
+ * gancho largo la última frase quedaba TAPADA (se vio en el reel del taller, "...acierta a la
+ * primera" desaparecía detrás de la ficha). Ahora el tamaño baja con el largo y la composición
+ * sabe de antemano cuánto mide el cartel, para colocar el objeto justo debajo.
+ */
+const ANCHO_CARTEL = 820 - 68; // 820 de caja menos el padding lateral
+const tamanoGancho = (texto: string): number => (texto.length <= 55 ? 64 : texto.length <= 80 ? 56 : texto.length <= 105 ? 48 : 42);
+const altoCartel = (texto: string, grande: boolean): number => {
+  const s = grande ? tamanoGancho(texto) : 46;
+  const lineas = Math.max(1, Math.ceil((texto.length * s * 0.54) / ANCHO_CARTEL));
+  return lineas * s * 1.08 + (grande ? 56 : 38);
+};
+
 const Rotulo: React.FC<{ texto: string; k: number; grande?: boolean }> = ({ texto, k, grande = false }) => {
   const e = spring({ frame: k, fps: 30, config: { damping: 14, stiffness: 190, mass: 0.6 } });
   const palabras = texto.split(/\s+/);
@@ -600,7 +773,7 @@ const Rotulo: React.FC<{ texto: string; k: number; grande?: boolean }> = ({ text
           boxShadow: "0 10px 0 rgba(0,0,0,0.25)",
           fontFamily: FUENTE,
           fontWeight: 900,
-          fontSize: grande ? 64 : 46,
+          fontSize: grande ? tamanoGancho(texto) : 46,
           letterSpacing: "0.02em",
           lineHeight: 1.08,
           color: MUNDO.tinta,
@@ -729,17 +902,17 @@ export const ReelCollage: React.FC<PropsReel> = (props) => {
           position: "absolute",
           left: 0,
           right: 0,
-          top: p.tipo === "gancho" ? 640 : 560,
+          top: p.tipo === "gancho" ? Math.max(600, SAFE_TOP + 20 + altoCartel(p.texto.toUpperCase(), true) + 60) : 560,
           display: "flex",
           justifyContent: "center",
-          transform: `translateY(${((1 - objetoEntra) * 260 + flota).toFixed(1)}px) rotate(${((1 - objetoEntra) * -10).toFixed(2)}deg) scale(${(1.16 * (0.6 + 0.4 * objetoEntra)).toFixed(3)})`,
+          transform: `translateY(${((1 - objetoEntra) * 260 + flota).toFixed(1)}px) rotate(${((1 - objetoEntra) * -10).toFixed(2)}deg) scale(${((p.tipo === "gancho" ? 1.3 : 1.16) * (0.6 + 0.4 * objetoEntra)).toFixed(3)})`,
           opacity: Math.min(1, objetoEntra * 2),
         }}
       >
         <ObjetoPapel key={`o${i}`} objeto={p.objeto} k={kObjeto} lado={p.lado} />
       </div>
 
-      <div style={{ position: "absolute", right: 150, top: 1090, transform: "scale(1.3)", transformOrigin: "bottom right" }}>
+      <div style={{ position: "absolute", right: 150, top: 1100, transform: "scale(1.3)", transformOrigin: "bottom right" }}>
         <Mascota frame={frame} lado={p.lado} k={k} />
       </div>
 

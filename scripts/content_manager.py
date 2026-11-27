@@ -94,7 +94,7 @@ FORMATOS = ("mundo", "collage", "duelo")
 # Objetos-metáfora del formato collage (`redes/video-logo/src/ReelCollage.tsx`).
 OBJETOS_COLLAGE = (
     "iman", "pecera", "diana", "clasificadora", "tostadora", "embudo", "agenda", "reloj", "papeles",
-    "telefono", "etiqueta", "pantalla", "ficha", "plano", "camara", "cajas", "maquina",
+    "telefono", "etiqueta", "pantalla", "ficha", "plano", "camara", "cajas", "maquina", "producto",
 )
 MAX_LARGO_TOOLTIP = 26
 _SEP_CAMPOS = ";"

@@ -5,6 +5,7 @@ import {
   FUENTE, NOMBRE_LOTE, SAFE_TOP, TarjetaMarca, Titular, ladoDe, normalizar, segmentoEn, segmentosReel,
   type Lado, type PlanoEntrada, type PropsReel, type Segmento,
 } from "./comun";
+import type { NombreNicho } from "./mundo/interiores";
 
 /**
  * ReelDuelo — pantalla partida A vs B (aprendido del reel "Novato vs Pro", ver guía §11).
@@ -23,6 +24,56 @@ import {
 export const PANELES_DUELO = ["chat", "papeles", "bandeja", "reloj", "cajas", "ficha", "agenda", "catalogo", "render", "correo", "maquina"] as const;
 type Panel = (typeof PANELES_DUELO)[number];
 
+/**
+ * Paneles que tienen sentido en cada nicho, por lado. Antes no existía esta lista: las 12 reglas
+ * de palabras valían para los cuatro negocios y el que no encajaba caía en papeles/correo. Medido
+ * sobre los 6 guiones reales: 39% de los planos acababan en esos dos, y 14 de 41 repetían el panel
+ * anterior (tres "correo" seguidos en el reel de la agencia).
+ */
+const PANEL_POR_NICHO: Record<NombreNicho, Record<Lado, Panel[]>> = {
+  taller: { A: ["papeles", "cajas", "chat", "reloj", "maquina"], B: ["ficha", "maquina", "cajas", "catalogo"] },
+  obra: { A: ["papeles", "reloj", "chat", "render"], B: ["render", "catalogo", "ficha", "agenda"] },
+  estudio: { A: ["cajas", "papeles", "chat", "reloj"], B: ["catalogo", "cajas", "render", "agenda"] },
+  oficina: { A: ["papeles", "bandeja", "chat", "reloj", "cajas"], B: ["correo", "agenda", "bandeja", "catalogo"] },
+};
+
+/** Palabras propias del nicho; se consultan antes que las generales de abajo. */
+const PANEL_POR_NICHO_PALABRA: Record<NombreNicho, [RegExp, Panel, Panel][]> = {
+  taller: [
+    [/ficha|medida|patron|talle|ajustad|acabado|especific|exact/, "papeles", "ficha"],
+    [/cose|costur|confeccion|maquina|produccion|puntada/, "maquina", "maquina"],
+    [/lote|pedido|entrega|devuel|caja|despacho|prenda|coleccion|tela/, "cajas", "cajas"],
+    [/audio|whatsapp|nota de voz|mensaje|celular/, "chat", "correo"],
+    [/adivina|interpreta|a su manera|a mano|papel|cuaderno|ciegas|duda/, "papeles", "ficha"],
+    [/semana|dias|reproceso|espera|rehacer|otra vez|tarde/, "reloj", "agenda"],
+  ],
+  obra: [
+    [/render|plano|espacio|remodel|obra|terminado|ves|visto|antes de/, "render", "render"],
+    [/pared|ladrillo|meson|mueble|piso|color|luz|tumbar|romper|andamio/, "render", "render"],
+    [/muestra|material|referencia|catalogo|acabado/, "papeles", "catalogo"],
+    [/pantalla|sistema|ajusta|panel|socio/, "papeles", "render"],
+    [/imagina|ciegas|a mano|papel|sorpresa|reproceso|chiquita/, "papeles", "ficha"],
+    [/semana|dias|espera|volver a|otra vez|tarde/, "reloj", "agenda"],
+  ],
+  estudio: [
+    [/semana|dias|espera|demora|tarde|nunca|lanzamiento/, "reloj", "agenda"],
+    [/catalogo|publica|tienda|vende|mira|nadie|producto|articulo/, "cajas", "catalogo"],
+    [/foto|sesion|luz|imagen|estudio|camara/, "cajas", "catalogo"],
+    [/inventario|bodega|stock|despacho|pedido|lote|caja|mueve/, "cajas", "cajas"],
+    [/celular|whatsapp|audio|llamada/, "chat", "correo"],
+    [/prestad|afan|a mano|papel|distinta/, "papeles", "ficha"],
+  ],
+  oficina: [
+    [/agenda|reunion|cita|calendario|agendad/, "reloj", "agenda"],
+    [/correo|email|bandeja|propuesta|escribe|responde|respuesta|seguimiento/, "bandeja", "correo"],
+    [/excel|celda|copia|pega|formulario|reporte|informe|dato|manual|papel|a mano/, "papeles", "correo"],
+    [/filtra|separa|califica|prospecto|lead|cliente|encajan/, "bandeja", "correo"],
+    [/hora|tarde|dias|semana|espera|reproceso|quinta vez|no vuelven/, "reloj", "agenda"],
+    [/audio|whatsapp|llamada|mensaje|celular/, "chat", "correo"],
+    [/sistema|automat|panel|herramienta|socio|listo|solo/, "papeles", "catalogo"],
+  ],
+};
+
 const PANEL_POR_PALABRA: [RegExp, Panel, Panel][] = [
   // [palabras, panel si es lado A, panel si es lado B]. Gana la primera que aparezca en la frase.
   [/audio|whatsapp|nota de voz/, "chat", "correo"],
@@ -40,8 +91,14 @@ const PANEL_POR_PALABRA: [RegExp, Panel, Panel][] = [
   [/papel|manual|excel|cuaderno|desorden|adivina|ciegas|interpreta/, "papeles", "ficha"],
 ];
 
-const ESTADO_A = ["SIN RESPUESTA", "PERDIENDO", "A CIEGAS", "ATRASADO"];
-const ESTADO_B = ["EN MARCHA", "RESPONDIDO", "EXACTO", "AGENDADO"];
+/** El estado de cada ventana habla del NEGOCIO, no del embudo de ventas: "AGENDADO" no dice nada
+ *  en un reel de catálogo. Son los mismos cuatro turnos, pero contados en el idioma del nicho. */
+const ESTADOS: Record<NombreNicho, Record<Lado, string[]>> = {
+  taller: { A: ["A OJO", "LOTE DEVUELTO", "SIN FICHA", "REPROCESO"], B: ["MEDIDA EXACTA", "LOTE LISTO", "SIN DUDAS", "A LA PRIMERA"] },
+  obra: { A: ["A CIEGAS", "HAY QUE TUMBAR", "SIN VERLO", "REPROCESO"], B: ["LO VES ANTES", "SIN SORPRESAS", "APROBADO", "TAL CUAL"] },
+  estudio: { A: ["NADIE LO MIRA", "FOTO DISTINTA", "SEMANAS", "SIN PUBLICAR"], B: ["SE VENDE SOLO", "CATÁLOGO LISTO", "SIN MOVER NADA", "PUBLICADO"] },
+  oficina: { A: ["SIN RESPUESTA", "TODO A MANO", "HORAS PERDIDAS", "ATRASADO"], B: ["RESPONDIDO", "AGENDADO", "EN MARCHA", "AUTOMÁTICO"] },
+};
 
 type PlanoDuelo = Segmento & { lado: Lado; panel: Panel; estado: string };
 
@@ -50,15 +107,33 @@ export const resolverDuelo = (props: PropsReel, duracionSeg: number) => {
   const entradas: PlanoEntrada[] = props.planos || [];
   let iA = 0;
   let iB = 0;
+  let anterior: Panel | null = null;
+  let ladoAnterior: Lado | null = null;
   const planos: PlanoDuelo[] = segmentos.map((seg) => {
     const e = entradas[seg.indice] || {};
     const lado = ladoDe(seg, props.bloques.length, e.lado as Lado | undefined);
     const t = normalizar(seg.texto);
-    let panel: Panel = lado === "A" ? "papeles" : "correo";
+    // Todo lo que la frase sugiere, en orden: primero el nicho, luego las reglas generales y por
+    // último los paneles del nicho. Tener la lista (y no un solo valor) permite resolver una
+    // repetición con lo que dice la propia frase en vez de dejar tres "correo" seguidos.
+    const candidatos: Panel[] = [];
+    const empujar = (x: Panel) => { if (!candidatos.includes(x)) candidatos.push(x); };
     const porTarjeta: Record<string, Panel> = { correo: "correo", agenda: "agenda", ficha: "ficha", catalogo: "catalogo", render: "render", chat: "chat" };
-    if (e.tarjeta && porTarjeta[e.tarjeta]) panel = porTarjeta[e.tarjeta];
-    else for (const [re, a, b] of PANEL_POR_PALABRA) if (re.test(t)) { panel = lado === "A" ? a : b; break; }
-    const estado = ((e.tooltip || "").trim() || (lado === "A" ? ESTADO_A[iA % ESTADO_A.length] : ESTADO_B[iB % ESTADO_B.length]))
+    if (e.tarjeta && porTarjeta[e.tarjeta]) empujar(porTarjeta[e.tarjeta]);
+    for (const [re, a, b] of PANEL_POR_NICHO_PALABRA[nicho]) if (re.test(t)) empujar(lado === "A" ? a : b);
+    for (const [re, a, b] of PANEL_POR_PALABRA) if (re.test(t)) empujar(lado === "A" ? a : b);
+    for (const x of PANEL_POR_NICHO[nicho][lado]) empujar(x);
+    let panel = candidatos[0];
+    // Solo se evita la repetición DENTRO del mismo lado: ver el mismo encargo en la ventana A y
+    // luego en la B es la mecánica del duelo, no un defecto, y forzar un cambio ahí rompía la
+    // frase ("ves el espacio terminado" acababa en un catálogo en vez de en el render).
+    if (panel === anterior && ladoAnterior === lado && seg.tipo !== "cierre") {
+      panel = candidatos.find((x) => x !== anterior) ?? panel;
+    }
+    anterior = panel;
+    ladoAnterior = lado;
+    const turnos = ESTADOS[nicho][lado];
+    const estado = ((e.tooltip || "").trim() || turnos[(lado === "A" ? iA : iB) % turnos.length])
       .toUpperCase().replace(/[0-9$%]/g, "").slice(0, 18);
     if (seg.tipo === "bloque") lado === "A" ? iA++ : iB++;
     return { ...seg, lado, panel, estado };
@@ -168,8 +243,10 @@ const ContenidoPanel: React.FC<{ panel: Panel; k: number; lado: Lado; paso?: num
     case "cajas":
       return (
         <g>
+          {/* La fila de abajo llegaba a y=318 dentro de un panel que recorta en 300: las cajas
+              salían partidas por el borde. Con +20 la pirámide entera cabe (10 → 278). */}
           {[[90, 170], [220, 170], [350, 170], [150, 80], [290, 80], [220, -10]].map(([x, y], i) => (
-            <g key={i} transform={`translate(${x} ${Number(y) + 60})`} opacity={s(i * 3)}>
+            <g key={i} transform={`translate(${x} ${Number(y) + 20})`} opacity={s(i * 3)}>
               <rect width={120} height={88} rx={6} fill="#c9a77c" stroke="#9b7c52" strokeWidth={3} />
               <line x1={60} x2={60} y1={0} y2={88} stroke="#9b7c52" strokeWidth={3} />
               {i % 2 === 0 ? <text x={60} y={58} fontSize={15} fill={MUNDO.vino} textAnchor="middle" style={fuente}>{lado === "A" ? "DEVUELTO" : "LISTO"}</text> : null}
