@@ -38,7 +38,18 @@ type Actor = {
   desfase?: number;
 };
 
-type Plano = { desde: Camara; hasta: Camara };
+type Plano = {
+  desde: Camara;
+  hasta: Camara;
+  /**
+   * Multiplicador entero de los sprites en este plano. Es obligatorio moverlo con la baldosa:
+   * la cámara acerca la GEOMETRÍA, pero un sprite mide lo que mide, así que sin esto un primer
+   * plano agranda el cuarto y deja al personaje igual de pequeño. Va por plano y no por
+   * fotograma a propósito: en pixel art solo se puede escalar por enteros, y hacerlo en medio
+   * de un movimiento daría un salto visible.
+   */
+  escala?: number;
+};
 
 /**
  * Encuadre declarativo: "quiero que lo que está en la baldosa (ci,cj) tenga los pies en el
@@ -86,13 +97,13 @@ const CAP_TALLER: Capitulo = {
   ],
   planos: [
     // general: el cuarto entero como diorama, con un acercamiento lento
-    { desde: encuadre(17.5, 3.5, 3.5, 67, 148), hasta: encuadre(19.5, 3.5, 3.5, 67, 153) },
+    { desde: encuadre(17.5, 3.5, 3.5, 67, 148), hasta: encuadre(19.5, 3.5, 3.5, 67, 153), escala: 1 },
     // primer plano del Socio
-    { desde: encuadre(46, 3.7, 4.3, 67, 170), hasta: encuadre(53, 3.7, 4.3, 67, 177) },
+    { desde: encuadre(46, 3.7, 4.3, 67, 172), hasta: encuadre(53, 3.7, 4.3, 67, 180), escala: 2 },
     // detalle de la mesa de corte, con deriva hacia la derecha
-    { desde: encuadre(36, 1.4, 2.2, 60, 150), hasta: encuadre(41, 1.4, 2.2, 68, 159) },
+    { desde: encuadre(52, 0.9, 1.9, 58, 170), hasta: encuadre(58, 0.9, 1.9, 69, 180), escala: 2 },
     // el mismo cuarto desde el OTRO lado, alejándose
-    { desde: encuadre(19.5, 3.5, 3.5, 67, 153, true), hasta: encuadre(17.5, 3.5, 3.5, 67, 148, true) },
+    { desde: encuadre(19.5, 3.5, 3.5, 67, 153, true), hasta: encuadre(17.5, 3.5, 3.5, 67, 148, true), escala: 1 },
   ],
   frases: [
     { texto: "Mandaste la muestra por WhatsApp.", plano: 0 },
@@ -118,11 +129,11 @@ const CAP_OBRA: Capitulo = {
   ],
   planos: [
     // todo en espejo: este capítulo se ve desde el lado contrario al del taller
-    { desde: encuadre(16.5, 4, 3.5, 67, 150, true), hasta: encuadre(18.5, 4, 3.5, 67, 156, true) },
-    { desde: encuadre(44, 4.9, 3.9, 67, 168, true), hasta: encuadre(50, 4.9, 3.9, 67, 175, true) },
+    { desde: encuadre(16.5, 4, 3.5, 67, 150, true), hasta: encuadre(18.5, 4, 3.5, 67, 156, true), escala: 1 },
+    { desde: encuadre(44, 4.9, 3.9, 67, 170, true), hasta: encuadre(50, 4.9, 3.9, 67, 178, true), escala: 2 },
     // travelling lateral: la cámara cruza el apartamento vacío de lado a lado
-    { desde: encuadre(29, 2.2, 2.6, 67, 168, true), hasta: encuadre(29, 5.8, 2.6, 67, 168, true) },
-    { desde: encuadre(18, 4, 3.5, 67, 153, true), hasta: encuadre(15.5, 4, 3.5, 67, 146, true) },
+    { desde: encuadre(29, 2.2, 2.6, 67, 164, true), hasta: encuadre(29, 5.8, 2.6, 67, 164, true), escala: 1 },
+    { desde: encuadre(18, 4, 3.5, 67, 153, true), hasta: encuadre(15.5, 4, 3.5, 67, 146, true), escala: 1 },
   ],
   frases: [
     { texto: "Te lo entregaron en obra gris.", plano: 0 },
@@ -146,17 +157,17 @@ const CAP_AZOTEA: Capitulo = {
     { quien: "socio", i: 2.2, j: 4.2, hasta: [3.8, 4.2], desfase: 13 },
   ],
   planos: [
-    { desde: encuadre(15.5, 4, 4, 67, 150), hasta: encuadre(17.5, 4, 4, 67, 156) },
-    { desde: encuadre(42, 3.9, 2.9, 67, 164), hasta: encuadre(48, 3.9, 2.9, 67, 171) },
+    { desde: encuadre(15.5, 4, 4, 67, 150), hasta: encuadre(17.5, 4, 4, 67, 156), escala: 1 },
+    { desde: encuadre(42, 3.9, 2.9, 67, 168), hasta: encuadre(48, 3.9, 2.9, 67, 176), escala: 2 },
     // travelling sobre las cajas sin fotografiar
-    { desde: encuadre(28, 2.0, 1.2, 67, 152), hasta: encuadre(28, 6.0, 2.6, 67, 152) },
-    { desde: encuadre(20, 4, 4, 67, 158), hasta: encuadre(17, 4, 4, 67, 150) },
+    { desde: encuadre(28, 2.0, 1.2, 67, 158), hasta: encuadre(28, 6.0, 2.6, 67, 158), escala: 1 },
+    { desde: encuadre(20, 4, 4, 67, 158), hasta: encuadre(17, 4, 4, 67, 150), escala: 1 },
   ],
   frases: [
     { texto: "Tienes cuarenta referencias listas.", plano: 0 },
     { texto: "Y una sola foto decente.", plano: 0 },
     { texto: "La del primer producto. De hace ocho meses.", plano: 1 },
-    { texto: "El estudio cuesta. El modelo cancela.", plano: 2 },
+    { texto: "El estudio no tiene cupo. El modelo cancela.", plano: 2 },
     { texto: "Entonces subes la del celular.", plano: 2 },
     { texto: "Sobre la mesa de la cocina.", plano: 3 },
     { texto: "Y te preguntas por qué nadie compra.", plano: 3, voz: "socio" },
@@ -173,6 +184,10 @@ export const CAPITULOS: Record<string, Capitulo> = {
 
 const CIERRE_SEG = 2.1;
 
+/**
+ * Sin voz grabada se estima por número de palabras; con voz, `tiempos` trae la duración REAL
+ * de cada frase medida sobre el audio, así el karaoke cae exacto sobre lo que se oye.
+ */
 const duracionFrase = (texto: string): number => {
   const palabras = texto.trim().split(/\s+/).length;
   return Math.min(3.4, Math.max(1.5, palabras * 0.34 + 0.45));
@@ -180,20 +195,20 @@ const duracionFrase = (texto: string): number => {
 
 type Tramo = { inicio: number; fin: number; frase: Frase };
 
-const linea = (cap: Capitulo): { tramos: Tramo[]; finFrases: number } => {
+const linea = (cap: Capitulo, tiempos?: number[]): { tramos: Tramo[]; finFrases: number } => {
   const tramos: Tramo[] = [];
   let t = 0;
-  for (const frase of cap.frases) {
-    const d = duracionFrase(frase.texto);
+  cap.frases.forEach((frase, k) => {
+    const d = tiempos?.[k] ?? duracionFrase(frase.texto);
     tramos.push({ inicio: t, fin: t + d, frase });
     t += d;
-  }
+  });
   return { tramos, finFrases: t };
 };
 
-export const duracionCapitulo = (props: { capitulo?: string }): number => {
+export const duracionCapitulo = (props: { capitulo?: string; tiempos?: number[] }): number => {
   const cap = CAPITULOS[props.capitulo ?? "taller"] ?? CAP_TALLER;
-  return Math.round((linea(cap).finFrases + CIERRE_SEG) * FPS);
+  return Math.round((linea(cap, props.tiempos).finFrases + CIERRE_SEG) * FPS);
 };
 
 const entre = (a: Camara, b: Camara, t: number): Camara => ({
@@ -217,7 +232,7 @@ const skyline = (g: Rejilla, yBase: number, desvio: number): void => {
   });
 };
 
-const construir = (cap: Capitulo, cam: Camara, frame: number, avance: number): Rejilla => {
+const construir = (cap: Capitulo, cam: Camara, frame: number, avance: number, escala: number): Rejilla => {
   const g = rejilla(LOGICO_W, LOGICO_H);
 
   if (cap.cielo) {
@@ -244,11 +259,16 @@ const construir = (cap: Capitulo, cam: Camara, frame: number, avance: number): R
       j,
       espejo: a.espejo,
       recolor: a.recolor,
-      sube: respiracion(frame, a.desfase ?? 0),
+      escala,
+      sube: respiracion(frame, a.desfase ?? 0) * escala,
     };
   });
 
-  dibujarHabitacion(g, cam, { ...cap.hab, muebles: [...cap.hab.muebles, ...actores] });
+  // la escenografía (perchas, matas, árboles) crece con el plano igual que la gente
+  const decorado = cap.hab.muebles.map((m) =>
+    m.tipo === "sprite" ? { ...m, escala: (m.escala ?? 1) * escala, sube: (m.sube ?? 0) * escala } : m,
+  );
+  dibujarHabitacion(g, cam, { ...cap.hab, muebles: [...decorado, ...actores] });
   return g;
 };
 
@@ -265,10 +285,10 @@ const Pixeles: React.FC<{ g: Rejilla }> = ({ g }) => {
 
 // ---------------------------------------------------------------- composición
 
-export const ReelPixel: React.FC<{ capitulo?: string }> = ({ capitulo = "taller" }) => {
+export const ReelPixel: React.FC<{ capitulo?: string; tiempos?: number[] }> = ({ capitulo = "taller", tiempos }) => {
   const frame = useCurrentFrame();
   const cap = CAPITULOS[capitulo] ?? CAP_TALLER;
-  const { tramos, finFrases } = linea(cap);
+  const { tramos, finFrases } = linea(cap, tiempos);
   const seg = frame / FPS;
 
   const actual = tramos.find((t) => seg >= t.inicio && seg < t.fin) ?? tramos[tramos.length - 1];
@@ -281,7 +301,7 @@ export const ReelPixel: React.FC<{ capitulo?: string }> = ({ capitulo = "taller"
   const avancePlano = Math.max(0, Math.min(1, (seg - p0) / Math.max(0.1, p1 - p0)));
   const cam = entre(cap.planos[iPlano].desde, cap.planos[iPlano].hasta, avancePlano);
 
-  const g = construir(cap, cam, frame, Math.min(1, seg / Math.max(0.1, finFrases)));
+  const g = construir(cap, cam, frame, Math.min(1, seg / Math.max(0.1, finFrases)), cap.planos[iPlano].escala ?? 1);
 
   // subtítulo palabra por palabra
   const palabras = actual.frase.texto.split(/\s+/);
@@ -295,7 +315,7 @@ export const ReelPixel: React.FC<{ capitulo?: string }> = ({ capitulo = "taller"
   return (
     <AbsoluteFill style={{ backgroundColor: "#141017", fontFamily: FUENTE, overflow: "hidden" }}>
       <AbsoluteFill style={{ background: "radial-gradient(120% 70% at 50% 44%, #241c28 0%, #141017 74%)" }} />
-      <AbsoluteFill style={{ opacity: enCierre ? 1 - cierreVisible * 0.82 : 1 }}>
+      <AbsoluteFill style={{ opacity: enCierre ? 1 - cierreVisible * 0.93 : 1 }}>
         <Pixeles g={g} />
       </AbsoluteFill>
 
@@ -345,7 +365,7 @@ export const ReelPixel: React.FC<{ capitulo?: string }> = ({ capitulo = "taller"
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: "0.4em", color: "#9c8f74" }}>{cap.badge}</div>
             <div style={{ marginTop: 20, fontSize: 92, fontWeight: 900, letterSpacing: "-0.03em", color: "#f3ead7" }}>EL SOCIO</div>
-            <div style={{ marginTop: 14, fontSize: 36, fontWeight: 700, color: "#9c1c2e" }}>@elsociotuia</div>
+            <div style={{ marginTop: 16, fontSize: 38, fontWeight: 800, color: "#d4697a", letterSpacing: "0.04em" }}>@elsociotuia</div>
           </div>
         </AbsoluteFill>
       )}
