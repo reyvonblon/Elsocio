@@ -13,6 +13,7 @@ cada frase por separado, el subtítulo palabra por palabra cae exacto sobre lo q
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -88,7 +89,10 @@ def generar(cap: str) -> Path:
     tiempos: list[float] = []
     trozos: list[Path] = []
     for k, texto in enumerate(frases):
-        destino = tmp / f"f{k:02d}.mp3"
+        # El nombre lleva el hash del TEXTO: si la frase cambia, el audio se regenera solo.
+        # Guardándolo solo por número, una frase editada reusaba en silencio la voz vieja.
+        firma = hashlib.sha1(texto.encode("utf-8")).hexdigest()[:10]
+        destino = tmp / f"f{k:02d}_{firma}.mp3"
         d = locutar(texto, destino)
         tiempos.append(round(d + PAUSA, 3))
         trozos.append(destino)

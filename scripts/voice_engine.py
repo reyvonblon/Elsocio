@@ -163,6 +163,36 @@ class GuardaVozBloqueada(ErrorVoz):
 
 # ------------------------------------------------ preparación del texto hablado
 
+# Palabras que una voz Multilingual de base italiana destroza al leerlas en español: se le
+# escriben como SUENAN en español. Solo afecta a la LOCUCIÓN, nunca al subtítulo en pantalla.
+# Probado el 2026-11-27: el elemento SSML <lang>, que sería la solución limpia, lo rechaza el
+# endpoint gratuito de Edge (devuelve 0 bytes), así que se corrige por ortografía.
+RESPELEO_LOCUCION: list[tuple[str, str]] = [
+    (r"\bWhatsApp\b", "Guasap"),
+    (r"\bwhatsapp\b", "guasap"),
+    (r"\be-?commerce\b", "icómers"),
+    (r"\bmarketing\b", "márketin"),
+    (r"\be-?mail\b", "imeil"),
+    (r"\bemails?\b", "imeils"),
+    (r"\bonline\b", "onláin"),
+    (r"\bbriefs?\b", "brif"),
+    (r"\bshowrooms?\b", "shourum"),
+    (r"\blinks?\b", "linc"),
+    (r"\bstock\b", "stoc"),
+    (r"\bclicks?\b", "clic"),
+    (r"\b3D\b", "tres de"),
+    (r"\bDM\b", "de eme"),
+]
+
+
+def respelear_para_locucion(texto: str) -> str:
+    """Reescribe extranjerismos como suenan en español. Solo para la voz, no para pantalla."""
+    salida = texto
+    for patron, reemplazo in RESPELEO_LOCUCION:
+        salida = re.sub(patron, reemplazo, salida)
+    return salida
+
+
 def limpiar_para_locucion(texto: str) -> str:
     """Convierte texto visual de pantalla en frases naturales para ser habladas.
 
@@ -179,6 +209,7 @@ def limpiar_para_locucion(texto: str) -> str:
     # Limpiar caracteres de control.
     limpio = "".join(" " if (0 <= ord(c) <= 31) else c for c in limpio)
     limpio = re.sub(r"\s+", " ", limpio).strip(" ,;:-")
+    limpio = respelear_para_locucion(limpio)
     if limpio and limpio[-1] not in ".?!…":
         limpio += "."
     return limpio
@@ -707,6 +738,10 @@ def _sintetizar_edge_una_vez(texto: str, voz: str, rate: str, pitch: str) -> byt
 
             cuerpo_interno = xml_escape(texto)
             xml_lang = inferir_xml_lang(voz)
+            # NOTA: el elemento <lang> (que haría a una voz Multilingual usar fonética
+            # española de verdad) lo RECHAZA el endpoint gratuito de Edge: devuelve 0 bytes.
+            # Probado el 2026-11-27. Por eso el acento italiano de Giuseppe sobre el español
+            # se corrige por otras vías: velocidad y cómo se le escriben las palabras.
             ssml = (
                 f"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='{xml_lang}'>"
                 f"<voice name='{xml_escape(voz)}'>"
@@ -761,7 +796,8 @@ def sintetizar_edge_con_marcas(
     texto: str, cfg: dict[str, str], *, rate_override: str = "", pitch_override: str = "",
 ) -> tuple[bytes, list[dict[str, object]]]:
     voz = (cfg.get("VOICE_NAME") or VOZ_EDGE_DEFECTO).strip()
-    rate_def = "+4%" if es_voz_multilingual(voz) else "+6%"
+    # Una voz Multilingual no nativa pierde dicción si se la acelera: va un punto por debajo.
+    rate_def = "-5%" if es_voz_multilingual(voz) else "+6%"
     rate = (rate_override or cfg.get("VOICE_RATE") or rate_def).strip()
     pitch = (pitch_override or cfg.get("VOICE_PITCH") or "+0Hz").strip()
     # Un Reel son 8 frases = 8 conexiones seguidas al servicio de Microsoft. Antes, un corte en

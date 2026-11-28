@@ -44,19 +44,49 @@ const SOCIO_PASO_B: Record<number, string> = {
 
 const CLIENTE_BOCA_ABIERTA: Record<number, string> = { 6: "....SSSSKKKKSSSS...." };
 
-export type EstadoActor = { habla?: boolean; camina?: boolean; frame: number };
+/** Manos al frente: se usa cuando el cliente trae algo. El objeto se estampa encima. */
+const CLIENTE_CARGA: Record<number, string> = {
+  16: "..AAaAAASSSSAAAaAA..",
+  17: "..AAaAAASSSSAAAaAA..",
+};
 
-export const socioAnimado = ({ habla, camina, frame }: EstadoActor): Sprite => {
+/** Desplaza un bloque de filas en horizontal. Sirve para negar con la cabeza sin redibujarla. */
+const desplazarFilas = (lineas: string[], desde: number, hasta: number, dx: number): string[] => {
+  if (dx === 0) return lineas;
+  return lineas.map((l, i) => {
+    if (i < desde || i > hasta) return l;
+    return dx > 0 ? ".".repeat(dx) + l.slice(0, l.length - dx) : l.slice(-dx) + ".".repeat(-dx);
+  });
+};
+
+export type Pose = "quieto" | "camina" | "carga" | "niega";
+
+export type EstadoActor = { habla?: boolean; camina?: boolean; pose?: Pose; frame: number };
+
+export const socioAnimado = ({ habla, pose = "quieto", frame }: EstadoActor): Sprite => {
   let lineas = SOCIO.lineas;
   // ciclo de boca ~4 veces por segundo, como la mascota del collage y como MOKO
   if (habla && frame % 8 < 4) lineas = cambiar(lineas, SOCIO_BOCA_ABIERTA);
-  if (camina) lineas = cambiar(lineas, frame % 16 < 8 ? SOCIO_PASO_A : SOCIO_PASO_B);
+  if (pose === "camina") lineas = cambiar(lineas, frame % 16 < 8 ? SOCIO_PASO_A : SOCIO_PASO_B);
+  // negar: la cabeza (filas 0-20) se mueve sola, el cuerpo se queda. Es el gesto que
+  // convierte "está ahí parado" en "está reaccionando a lo que ve".
+  if (pose === "niega") {
+    const fase = Math.sin(frame * 0.33);
+    lineas = desplazarFilas(lineas, 0, 20, fase > 0.4 ? 1 : fase < -0.4 ? -1 : 0);
+  }
   return lineas === SOCIO.lineas ? SOCIO : { paleta: SOCIO.paleta, lineas };
 };
 
-export const clienteAnimado = ({ habla, frame }: EstadoActor): Sprite => {
-  if (!habla || frame % 8 >= 4) return CLIENTE;
-  return { paleta: CLIENTE.paleta, lineas: cambiar(CLIENTE.lineas, CLIENTE_BOCA_ABIERTA) };
+export const clienteAnimado = ({ habla, pose = "quieto", frame }: EstadoActor): Sprite => {
+  let lineas = CLIENTE.lineas;
+  if (habla && frame % 8 < 4) lineas = cambiar(lineas, CLIENTE_BOCA_ABIERTA);
+  if (pose === "carga") lineas = cambiar(lineas, CLIENTE_CARGA);
+  if (pose === "camina") {
+    lineas = cambiar(lineas, frame % 16 < 8
+      ? { 26: "....JJJJ..JJJJ......", 27: "...JJJJ....JJJJ.....", 28: "...JJJJ....JJJJ.....", 31: "...KKKKK..KKKKK.....", 32: "..KKKKK....KKKKK....", 33: "..KKKKK....KKKKK...." }
+      : { 26: ".....JJJJJJJJ.......", 27: ".....JJJJJJJJ.......", 28: ".....JJJJJJJJ.......", 31: "....KKKKKKKKKK......", 32: "....KKKKKKKKKK......", 33: "....KKKKKKKKKK......" });
+  }
+  return lineas === CLIENTE.lineas ? CLIENTE : { paleta: CLIENTE.paleta, lineas };
 };
 
 /**

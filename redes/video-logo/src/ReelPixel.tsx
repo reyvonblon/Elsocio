@@ -1,10 +1,11 @@
 import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame } from "remotion";
 import { FUENTE } from "./comun";
-import { aFranjas, caja, rejilla, type Camara, type Rejilla } from "./pixel/lienzo";
+import { aFranjas, caja, rejilla, type Camara, type Rejilla, type Sprite } from "./pixel/lienzo";
 import { dibujarHabitacion, type Habitacion, type Mueble } from "./pixel/escena";
-import { clienteAnimado, respiracion, socioAnimado } from "./pixel/anim";
+import { clienteAnimado, respiracion, socioAnimado, type Pose } from "./pixel/anim";
 import { AZOTEA, OBRA, TALLER } from "./pixel/escenarios";
+import { BOLSA, FICHA, PRENDA } from "./pixel/sprites";
 
 /**
  * Reel en pixel art isométrico, en formato de CAPÍTULO.
@@ -18,24 +19,92 @@ import { AZOTEA, OBRA, TALLER } from "./pixel/escenarios";
  *    y desfasadas por actor.
  */
 
-const LOGICO_W = 135;
-const LOGICO_H = 240;
+/**
+ * Densidad del pixel art. K=1 son 135x240 celdas lógicas; K=2 son 270x480, que es el doble de
+ * detalle por objeto. Todo lo demás (baldosas, encuadres, escala de sprites) se multiplica por
+ * K automáticamente, así que los planos se siguen escribiendo en la misma escala legible.
+ */
+const K = 2;
+const LOGICO_W = 135 * K;
+const LOGICO_H = 240 * K;
 const FPS = 30;
 
 // ---------------------------------------------------------------- tipos del guion
 
 type Quien = "socio" | "cliente";
 
-type Actor = {
-  quien: Quien;
+/**
+ * Una llave es "en el segundo t, este actor está en esta baldosa haciendo esto". Entre llaves
+ * se interpola. Esto es lo que faltaba: sin recorrido ni pose, los personajes eran estatuas y
+ * el único cambio en pantalla venía de los cortes de plano.
+ */
+type Llave = {
+  /** Segundo absoluto. Úsalo solo si el momento no depende de lo que se esté diciendo. */
+  t?: number;
+  /**
+   * Momento expresado en FRASES (2 = al empezar la frase 3; 2.5 = a mitad de ella). Es lo que
+   * hace que la acción siga sincronizada aunque la locución cambie de duración: los tiempos
+   * reales se miden sobre el audio en cada render, y una frase más larga mueve la acción con
+   * ella en vez de desencajarla.
+   */
+  f?: number;
   i: number;
   j: number;
-  /** Si está, el actor camina de (i,j) hasta aquí a lo largo del capítulo. */
-  hasta?: [number, number];
+  pose?: Pose;
+};
+
+type Actor = {
+  quien: Quien;
+  i?: number;
+  j?: number;
+  llaves?: Llave[];
   recolor?: Record<string, string>;
   espejo?: boolean;
   /** Desfase de la respiración: dos actores que respiran al mismo compás parecen autómatas. */
   desfase?: number;
+};
+
+/** Objeto de utilería que aparece, se mueve y desaparece: la bolsa, la prenda, la ficha. */
+type Pieza = {
+  sprite: Sprite;
+  llaves?: Llave[];
+  i?: number;
+  j?: number;
+  sube?: number;
+  /** Ventana de existencia, en frases (mismo criterio que `Llave.f`). */
+  desdeF?: number;
+  hastaF?: number;
+  sombra?: boolean;
+};
+
+/** Convierte un momento en frases a segundos sobre la línea de tiempo real del audio. */
+const segundoDeFrase = (f: number, tramos: Tramo[]): number => {
+  const k = Math.floor(f);
+  if (k >= tramos.length) return tramos[tramos.length - 1].fin;
+  const tr = tramos[Math.max(0, k)];
+  return tr.inicio + (tr.fin - tr.inicio) * (f - k);
+};
+
+const resolverLlaves = (llaves: Llave[], tramos: Tramo[]): { t: number; i: number; j: number; pose: Pose }[] =>
+  llaves.map((l) => ({
+    t: l.f !== undefined ? segundoDeFrase(l.f, tramos) : (l.t ?? 0),
+    i: l.i,
+    j: l.j,
+    pose: l.pose ?? "quieto",
+  }));
+
+/** Posición interpolada y pose vigente en el segundo `t`. */
+const enTiempo = (llaves: { t: number; i: number; j: number; pose: Pose }[], t: number): { i: number; j: number; pose: Pose } => {
+  if (t <= llaves[0].t) return llaves[0];
+  for (let k = 0; k < llaves.length - 1; k++) {
+    const a = llaves[k];
+    const b = llaves[k + 1];
+    if (t >= a.t && t < b.t) {
+      const u = (t - a.t) / Math.max(0.01, b.t - a.t);
+      return { i: a.i + (b.i - a.i) * u, j: a.j + (b.j - a.j) * u, pose: a.pose };
+    }
+  }
+  return llaves[llaves.length - 1];
 };
 
 type Plano = {
@@ -56,12 +125,17 @@ type Plano = {
  * punto (sx,sy) de la pantalla, con este tamaño de baldosa". Calcular `ox`/`oy` a mano era
  * la fuente seguir de planos descuadrados.
  */
-const encuadre = (tw: number, ci: number, cj: number, sx: number, sy: number, espejo?: boolean): Camara => ({
-  tw,
-  espejo,
-  ox: sx - (ci - cj) * (tw / 2) * (espejo ? -1 : 1),
-  oy: sy - (ci + cj) * (tw / 4) - tw / 8,
-});
+const encuadre = (twBase: number, ci: number, cj: number, sxBase: number, syBase: number, espejo?: boolean): Camara => {
+  const tw = twBase * K;
+  const sx = sxBase * K;
+  const sy = syBase * K;
+  return {
+    tw,
+    espejo,
+    ox: sx - (ci - cj) * (tw / 2) * (espejo ? -1 : 1),
+    oy: sy - (ci + cj) * (tw / 4) - tw / 8,
+  };
+};
 
 type Frase = { texto: string; plano: number; voz?: Quien };
 
@@ -74,6 +148,8 @@ export type Capitulo = {
   hab: Habitacion;
   cielo?: Cielo;
   actores: Actor[];
+  /** Utilería con guion: lo que entra y sale de la escena mientras habla la voz. */
+  piezas?: Pieza[];
   planos: Plano[];
   frases: Frase[];
 };
@@ -92,27 +168,75 @@ const CAP_TALLER: Capitulo = {
   badge: "CONFECCIÓN",
   hab: TALLER,
   actores: [
-    { quien: "cliente", i: 4.6, j: 2.6, recolor: { A: "#6b7f5e", a: "#53634a", J: "#4a5668" } },
-    { quien: "socio", i: 3.2, j: 3.8, desfase: 11 },
+    {
+      quien: "cliente",
+      recolor: { A: "#6b7f5e", a: "#53634a" },
+      // entra por el frente cargando la bolsa, cruza el taller y la deja en la mesa
+      llaves: [
+        { f: 0, i: 6.7, j: 5.6, pose: "camina" },
+        { f: 1, i: 5.8, j: 4.1, pose: "camina" },
+        { f: 2, i: 5.2, j: 3.0, pose: "carga" },
+        { f: 3.1, i: 4.6, j: 2.2, pose: "carga" },
+        { f: 3.5, i: 4.6, j: 2.2, pose: "quieto" },
+        { f: 9, i: 4.6, j: 2.2, pose: "quieto" },
+      ],
+    },
+    {
+      quien: "socio",
+      desfase: 11,
+      // mira la prenda, NIEGA con la cabeza, y al final se acerca a la mesa
+      llaves: [
+        { f: 0, i: 1.2, j: 2.8, pose: "quieto" },
+        { f: 4, i: 1.2, j: 2.8, pose: "niega" },
+        { f: 5, i: 1.2, j: 2.8, pose: "quieto" },
+        { f: 6, i: 1.5, j: 3.3, pose: "camina" },
+        { f: 6.5, i: 1.5, j: 3.3, pose: "quieto" },
+        { f: 9, i: 1.5, j: 3.3, pose: "quieto" },
+      ],
+    },
+  ],
+  piezas: [
+    // la bolsa viaja con el cliente y queda en el piso junto a la mesa
+    {
+      sprite: BOLSA,
+      llaves: [
+        { f: 0, i: 6.5, j: 5.3 },
+        { f: 1, i: 5.6, j: 3.8 },
+        { f: 2, i: 5.0, j: 2.7 },
+        { f: 3.1, i: 4.4, j: 1.9 },
+        { f: 3.4, i: 4.0, j: 2.6 },
+        { f: 9, i: 4.0, j: 2.6 },
+      ],
+    },
+    // la prenda mal cosida aparece sobre la mesa cuando la saca
+    { sprite: PRENDA, i: 1.0, j: 0.9, sube: 14, desdeF: 3.15, hastaF: 5.0, sombra: false },
+    // y la ficha técnica entra cuando la voz la nombra: es el objeto que resuelve el capítulo
+    { sprite: FICHA, i: 1.0, j: 0.9, sube: 14, desdeF: 5.0, sombra: false },
   ],
   planos: [
-    // general: el cuarto entero como diorama, con un acercamiento lento
-    { desde: encuadre(17.5, 3.5, 3.5, 67, 148), hasta: encuadre(19.5, 3.5, 3.5, 67, 153), escala: 1 },
+    // entra al taller: general con acercamiento
+    { desde: encuadre(16.5, 3.5, 3.5, 67, 146), hasta: encuadre(18.5, 3.5, 3.5, 67, 152), escala: 1 },
+    // lo seguimos cruzar el cuarto
+    { desde: encuadre(26, 5.6, 4.0, 78, 170), hasta: encuadre(29, 5.1, 2.9, 72, 176), escala: 1 },
     // primer plano del Socio
-    { desde: encuadre(46, 3.7, 4.3, 67, 172), hasta: encuadre(53, 3.7, 4.3, 67, 180), escala: 2 },
-    // detalle de la mesa de corte, con deriva hacia la derecha
-    { desde: encuadre(52, 0.9, 1.9, 58, 170), hasta: encuadre(58, 0.9, 1.9, 69, 180), escala: 2 },
-    // el mismo cuarto desde el OTRO lado, alejándose
-    { desde: encuadre(19.5, 3.5, 3.5, 67, 153, true), hasta: encuadre(17.5, 3.5, 3.5, 67, 148, true), escala: 1 },
+    { desde: encuadre(46, 1.7, 3.3, 62, 172), hasta: encuadre(52, 1.7, 3.3, 58, 180), escala: 2 },
+    // la bolsa aterriza: plano medio de la mesa y los dos
+    { desde: encuadre(29, 2.9, 2.5, 67, 172), hasta: encuadre(32, 2.9, 2.5, 62, 178), escala: 1 },
+    // detalle de la prenda sobre la mesa, con el Socio negando al borde del cuadro
+    { desde: encuadre(50, 1.5, 1.6, 72, 158), hasta: encuadre(56, 1.5, 1.6, 82, 166), escala: 2 },
+    // entra la ficha
+    { desde: encuadre(48, 1.4, 1.5, 70, 160), hasta: encuadre(53, 1.4, 1.5, 78, 168), escala: 2 },
+    // cierre: el taller entero desde el OTRO lado
+    { desde: encuadre(19, 3.5, 3.5, 67, 152, true), hasta: encuadre(16.5, 3.5, 3.5, 67, 146, true), escala: 1 },
   ],
   frases: [
     { texto: "Mandaste la muestra por WhatsApp.", plano: 0 },
-    { texto: "Tres notas de voz y una foto borrosa.", plano: 0 },
-    { texto: "El patronista no se equivocó. Adivinó.", plano: 1, voz: "socio" },
-    { texto: "Y el lote salió dos centímetros corto.", plano: 2 },
-    { texto: "Sesenta prendas. Otra vez.", plano: 2 },
-    { texto: "Una ficha dice medidas, telas y costuras.", plano: 3, voz: "socio" },
-    { texto: "El taller deja de adivinar.", plano: 3, voz: "socio" },
+    { texto: "Tres notas de voz y una foto borrosa.", plano: 1 },
+    { texto: "El patronista no se equivocó. Lo que hizo fue adivinar.", plano: 2, voz: "socio" },
+    { texto: "Y el lote salió dos centímetros corto.", plano: 3 },
+    { texto: "Sesenta prendas. Otra vez.", plano: 4 },
+    { texto: "Una ficha dice medidas, telas y costuras.", plano: 5, voz: "socio" },
+    { texto: "El taller deja de adivinar.", plano: 6, voz: "socio" },
   ],
 };
 
@@ -125,7 +249,15 @@ const CAP_OBRA: Capitulo = {
   actores: [
     { quien: "cliente", i: 4.0, j: 3.2, recolor: { A: "#8d5a4a", a: "#6e4538", H: "#4a3426" } },
     { quien: "cliente", i: 4.9, j: 3.6, recolor: { A: "#53637d", a: "#3f4d63" }, espejo: true, desfase: 7 },
-    { quien: "socio", i: 2.2, j: 4.8, hasta: [3.6, 4.8], desfase: 17 },
+    {
+      quien: "socio",
+      desfase: 17,
+      llaves: [
+        { t: 0, i: 2.2, j: 4.8, pose: "camina" },
+        { t: 9, i: 3.6, j: 4.8, pose: "camina" },
+        { t: 30, i: 3.6, j: 4.8, pose: "quieto" },
+      ],
+    },
   ],
   planos: [
     // todo en espejo: este capítulo se ve desde el lado contrario al del taller
@@ -154,7 +286,15 @@ const CAP_AZOTEA: Capitulo = {
   cielo: ATARDECER,
   actores: [
     { quien: "cliente", i: 3.4, j: 2.4, recolor: { A: "#9c1c2e", a: "#78121f" } },
-    { quien: "socio", i: 2.2, j: 4.2, hasta: [3.8, 4.2], desfase: 13 },
+    {
+      quien: "socio",
+      desfase: 13,
+      llaves: [
+        { t: 0, i: 2.2, j: 4.2, pose: "camina" },
+        { t: 10, i: 3.8, j: 4.2, pose: "camina" },
+        { t: 30, i: 3.8, j: 4.2, pose: "quieto" },
+      ],
+    },
   ],
   planos: [
     { desde: encuadre(15.5, 4, 4, 67, 150), hasta: encuadre(17.5, 4, 4, 67, 156), escala: 1 },
@@ -220,43 +360,48 @@ const entre = (a: Camara, b: Camara, t: number): Camara => ({
 
 // ---------------------------------------------------------------- pintado
 
-const skyline = (g: Rejilla, yBase: number, desvio: number): void => {
+const skyline = (g: Rejilla, yBase: number, desvio: number, k: number): void => {
   // silueta de ciudad: alturas fijas, para que no cambie entre fotogramas
   const torres = [6, 14, 9, 22, 11, 17, 7, 26, 12, 19, 8, 15, 23, 10, 18, 7, 13, 20];
-  const ancho = 8;
-  torres.forEach((alto, k) => {
-    const x = Math.round(k * ancho - 4 + desvio);
-    caja(g, x, yBase - alto, ancho - 1, alto, k % 2 === 0 ? "#4a3a4a" : "#3f3242");
-    if (alto > 12) caja(g, x + 2, yBase - alto + 3, 1, 1, "#c98a55");
-    if (alto > 18) caja(g, x + 4, yBase - alto + 7, 1, 1, "#d6a165");
+  const ancho = 8 * k;
+  torres.forEach((alto, idx) => {
+    const h = alto * k;
+    const x = Math.round(idx * ancho - 4 * k + desvio);
+    caja(g, x, yBase - h, ancho - k, h, idx % 2 === 0 ? "#4a3a4a" : "#3f3242");
+    if (alto > 12) caja(g, x + 2 * k, yBase - h + 3 * k, k, k, "#c98a55");
+    if (alto > 18) caja(g, x + 4 * k, yBase - h + 7 * k, k, k, "#d6a165");
   });
 };
 
-const construir = (cap: Capitulo, cam: Camara, frame: number, avance: number, escala: number): Rejilla => {
+const construir = (
+  cap: Capitulo,
+  cam: Camara,
+  frame: number,
+  seg: number,
+  escala: number,
+  tramos: Tramo[],
+): Rejilla => {
   const g = rejilla(LOGICO_W, LOGICO_H);
 
   if (cap.cielo) {
-    const altoBanda = Math.ceil(178 / cap.cielo.bandas.length);
+    const altoBanda = Math.ceil((178 * K) / cap.cielo.bandas.length);
     cap.cielo.bandas.forEach((c, k) => caja(g, 0, k * altoBanda, LOGICO_W, altoBanda, c));
     // el horizonte vive donde empieza el piso, y se desplaza menos que la cámara (paralaje)
-    if (cap.cielo.skyline) skyline(g, Math.round(cam.oy - 6), (cam.ox - 67) * 0.3);
+    if (cap.cielo.skyline) skyline(g, Math.round(cam.oy - 6 * K), (cam.ox - 67 * K) * 0.3, K);
   }
 
   // los actores entran como muebles-sprite, para que el pintor los ordene por profundidad
   const actores: Mueble[] = cap.actores.map((a) => {
-    const camina = Boolean(a.hasta);
-    const i = a.hasta ? a.i + (a.hasta[0] - a.i) * avance : a.i;
-    const j = a.hasta ? a.j + (a.hasta[1] - a.j) * avance : a.j;
-    const habla = true; // en los tres capítulos siempre hay alguien hablando en cuadro
+    const pos = a.llaves ? enTiempo(resolverLlaves(a.llaves, tramos), seg) : { i: a.i ?? 0, j: a.j ?? 0, pose: "quieto" as Pose };
     const sprite =
       a.quien === "socio"
-        ? socioAnimado({ habla, camina, frame })
-        : clienteAnimado({ habla, frame: frame + (a.desfase ?? 0) });
+        ? socioAnimado({ habla: true, pose: pos.pose, frame })
+        : clienteAnimado({ habla: true, pose: pos.pose, frame: frame + (a.desfase ?? 0) });
     return {
       tipo: "sprite",
       sprite,
-      i,
-      j,
+      i: pos.i,
+      j: pos.j,
       espejo: a.espejo,
       recolor: a.recolor,
       escala,
@@ -264,11 +409,37 @@ const construir = (cap: Capitulo, cam: Camara, frame: number, avance: number, es
     };
   });
 
-  // la escenografía (perchas, matas, árboles) crece con el plano igual que la gente
+  // utilería con guion: solo existe dentro de su ventana de tiempo
+  const piezas: Mueble[] = (cap.piezas ?? [])
+    .filter(
+      (p) =>
+        seg >= (p.desdeF === undefined ? 0 : segundoDeFrase(p.desdeF, tramos)) &&
+        seg < (p.hastaF === undefined ? 1e9 : segundoDeFrase(p.hastaF, tramos)),
+    )
+    .map((p) => {
+      const pos = p.llaves ? enTiempo(resolverLlaves(p.llaves, tramos), seg) : { i: p.i ?? 0, j: p.j ?? 0 };
+      return {
+        tipo: "sprite" as const,
+        sprite: p.sprite,
+        i: pos.i,
+        j: pos.j,
+        escala,
+        sube: (p.sube ?? 0) * escala,
+        sombra: p.sombra,
+      };
+    });
+
+  // la escenografía (perchas, matas, maniquí) crece con el plano igual que la gente
   const decorado = cap.hab.muebles.map((m) =>
     m.tipo === "sprite" ? { ...m, escala: (m.escala ?? 1) * escala, sube: (m.sube ?? 0) * escala } : m,
   );
-  dibujarHabitacion(g, cam, { ...cap.hab, muebles: [...decorado, ...actores] });
+  const hab: Habitacion = {
+    ...cap.hab,
+    altoPared: (cap.hab.altoPared ?? 46) * K,
+    profundidadLosa: (cap.hab.profundidadLosa ?? 9) * K,
+    muebles: [...decorado, ...piezas, ...actores],
+  };
+  dibujarHabitacion(g, cam, hab);
   return g;
 };
 
@@ -301,7 +472,7 @@ export const ReelPixel: React.FC<{ capitulo?: string; tiempos?: number[] }> = ({
   const avancePlano = Math.max(0, Math.min(1, (seg - p0) / Math.max(0.1, p1 - p0)));
   const cam = entre(cap.planos[iPlano].desde, cap.planos[iPlano].hasta, avancePlano);
 
-  const g = construir(cap, cam, frame, Math.min(1, seg / Math.max(0.1, finFrases)), cap.planos[iPlano].escala ?? 1);
+  const g = construir(cap, cam, frame, seg, (cap.planos[iPlano].escala ?? 1) * K, tramos);
 
   // subtítulo palabra por palabra
   const palabras = actual.frase.texto.split(/\s+/);

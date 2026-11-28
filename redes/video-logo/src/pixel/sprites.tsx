@@ -240,3 +240,150 @@ export const ARBUSTO: Sprite = {
     "....GGGgggg...",
   ],
 };
+
+// ---------------------------------------------------------------- utilería del taller
+// Objetos que entran y salen durante el capítulo. Son los que cuentan la historia: sin algo
+// que cambie de estado en pantalla, el plano está muerto por mucho que la cámara se mueva.
+
+/** Bolsa de tela que trae el cliente, 12 x 14. */
+export const BOLSA: Sprite = {
+  paleta: { a: "#b8a98f", A: "#cdbfa5", k: "#6d6354", R: "#9c1c2e" },
+  lineas: [
+    "..k........k",
+    "..k........k",
+    ".kAk......kk",
+    ".AAAk....kAA",
+    "AAAAAkkkAAAA",
+    "AAAAAAAAAAAA",
+    "AAAARRRRAAAA",
+    "AAAARRRRAAAA",
+    "AAAAAAAAAAAA",
+    "aAAAAAAAAAAa",
+    "aAAAAAAAAAAa",
+    "aaAAAAAAAAaa",
+    "aaaAAAAAAaaa",
+    "aaaaaaaaaaaa",
+  ],
+};
+
+/** Prenda extendida sobre la mesa, 18 x 14. Es "la muestra" que salió mal. */
+export const PRENDA: Sprite = {
+  paleta: { T: "#4e6a86", t: "#3c5368", W: "#e9e2d3", k: "#2b3b4a" },
+  lineas: [
+    "...kkk......kkk...",
+    "..kTTTk....kTTTk..",
+    ".kTTTTTkkkkTTTTTk.",
+    "kTTTTTTTWWTTTTTTTk",
+    "kTTTTTTWWWWTTTTTTk",
+    ".kTTTTTTWWTTTTTTk.",
+    "..kTTTTTTTTTTTTk..",
+    "..kTTTTTTTTTTTTk..",
+    "...kTTTTTTTTTTk...",
+    "...kTTTTTTTTTTk...",
+    "...kTTTTTTTTTTk...",
+    "...kTTTTTTTTTTk...",
+    "...kttttttttttk...",
+    "....kkkkkkkkkk....",
+  ],
+};
+
+/** Maniquí de costura, 14 x 34. Lo que hace que un cuarto se lea como taller y no como oficina. */
+export const MANIQUI: Sprite = {
+  paleta: { M: "#d9cdb4", m: "#b9ab8e", k: "#6d6354", p: "#8d8578" },
+  lineas: [
+    "....MMMMMM....",
+    "...MMMMMMMM...",
+    "..MMMMMMMMMM..",
+    "..MMMMMMMmmM..",
+    ".MMMMMMMMmmmM.",
+    ".MMMMMMMMmmmM.",
+    "MMMMMMMMMmmmmM",
+    "MMMMMMMMMmmmmM",
+    "MMMMMMMMMmmmmM",
+    "MMMMMMMMMmmmmM",
+    ".MMMMMMMMmmmM.",
+    ".MMMMMMMMmmmM.",
+    ".MMMMMMMMmmmM.",
+    "..MMMMMMMmmM..",
+    "..MMMMMMMmmM..",
+    "...MMMMMMmM...",
+    "...MMMMMMmM...",
+    "....MMMMmM....",
+    "....kkkkkk....",
+    "......kk......",
+    "......kk......",
+    "......kk......",
+    "......kk......",
+    "......kk......",
+    "......kk......",
+    "......kk......",
+    "......kk......",
+    "......kk......",
+    "......kk......",
+    "......kk......",
+    ".....pppp.....",
+    "....pppppp....",
+    "...pppppppp...",
+    "....pppppp....",
+  ],
+};
+
+/** Ficha técnica: el objeto que resuelve el capítulo. 16 x 20. */
+export const FICHA: Sprite = {
+  paleta: { W: "#f6f1e4", g: "#9aa7b4", k: "#3a4450", R: "#9c1c2e", b: "#c9c2b0" },
+  lineas: [
+    "WWWWWWWWWWWWWWWW",
+    "WkkkkkkWWRRRRRWW",
+    "WWWWWWWWWWWWWWWW",
+    "WWggggggggggWWWW",
+    "WWg........gWWWW",
+    "WWg..gggg..gWWWW",
+    "WWg..g..g..gWWWW",
+    "WWg..g..g..gWWWW",
+    "WWg..gggg..gWWWW",
+    "WWg........gWWWW",
+    "WWggggggggggWWWW",
+    "WWWWWWWWWWWWWWWW",
+    "WkkkkkWWkkkkkWWW",
+    "WWWWWWWWWWWWWWWW",
+    "WkkkkkkkWWkkkWWW",
+    "WWWWWWWWWWWWWWWW",
+    "WkkkkWWkkkkkkWWW",
+    "WWWWWWWWWWWWWWWW",
+    "WWWWWWWWWWWWWWWW",
+    "bbbbbbbbbbbbbbbb",
+  ],
+};
+
+/** Rollos de tela apilados, 18 x 12. Relleno de taller: sin esto el cuarto se ve a estreno. */
+export const ROLLOS: Sprite = {
+  paleta: { R: "#9c1c2e", A: "#3f5163", D: "#d9a441", V: "#5f7a5c", k: "#4a4036", W: "#e9e2d3" },
+  lineas: [
+    ".....RRRRRRRR.....",
+    "....RRRRRRRRRR....",
+    "...kRRRRRRRRRRk...",
+    "...AAAAAAAAAAAA...",
+    "..AAAAAAAAAAAAAA..",
+    "..kAAAAAAAAAAAAk..",
+    "..DDDDDDDDDDDDDD..",
+    ".DDDDDDDDDDDDDDDD.",
+    ".kDDDDDDDDDDDDDDk.",
+    ".WWWWWWWWWWWWWWWW.",
+    "VVVVVVVVVVVVVVVVVV",
+    "kVVVVVVVVVVVVVVVVk",
+  ],
+};
+
+/** Tijeras de sastre sobre la mesa, 12 x 7. */
+export const TIJERAS: Sprite = {
+  paleta: { m: "#b9b5ac", M: "#dcd8cf", k: "#2b2b30" },
+  lineas: [
+    "kk........kk",
+    "kkk......kkk",
+    ".kkk....kkk.",
+    "..MmmmmmmM..",
+    "...MmmmmM...",
+    "....Mmmm....",
+    ".....Mm.....",
+  ],
+};

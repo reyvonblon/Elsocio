@@ -8,9 +8,16 @@
  */
 
 import type { Habitacion } from "./escena";
-import { ARBOL, ARBUSTO, CLIENTE, MATA, PERCHA, SOCIO } from "./sprites";
+import { ARBOL, ARBUSTO, CLIENTE, MANIQUI, MATA, PERCHA, ROLLOS, SOCIO, TIJERAS } from "./sprites";
 
-/** Nicho: fichas técnicas de ropa. Taller de confección, interior cálido. */
+/**
+ * Nicho: fichas técnicas de ropa. Taller de confección, interior cálido.
+ *
+ * Denso a propósito. La primera versión tenía 3 muebles y Raymond lo leyó exactamente como lo
+ * que era: "un cuadro con 2 personas ahí sin hacer nada". Un taller real está lleno — rollos
+ * por el piso, retazos, cajas, el maniquí, la plancha — y esa acumulación es la mitad de lo
+ * que hace que una sala en pixel art se vea terminada y no a estreno.
+ */
 export const TALLER: Habitacion = {
   nombre: "taller de confección",
   ti: 7,
@@ -20,24 +27,64 @@ export const TALLER: Habitacion = {
   paredIzq: "#cdc1a6",
   paredDer: "#e3dac4",
   altoPared: 72,
-  ventanas: [{ pared: "der", desde: 2.7, hasta: 4.5, z0: 30, z1: 62 }],
+  ventanas: [{ pared: "der", desde: 3.4, hasta: 5.2, z0: 30, z1: 62 }],
   muebles: [
-    { tipo: "tapete", i: 1.4, j: 2.1, wi: 2.9, wj: 2.0, color: "#8d2435" },
-    // mesa de corte: tablero fino sobre cuatro patas. Como caja maciza se leía como una cama.
+    { tipo: "tapete", i: 2.0, j: 2.4, wi: 2.9, wj: 2.0, color: "#8d2435" },
+
+    // --- pared izquierda (i=0): mesa de corte larga, máquina de coser y herramienta
     { tipo: "cubo", i: 0.25, j: 0.65, wi: 0.1, wj: 0.1, alto: 12, mat: "maderaOscura" },
     { tipo: "cubo", i: 1.05, j: 0.65, wi: 0.1, wj: 0.1, alto: 12, mat: "maderaOscura" },
     { tipo: "cubo", i: 0.25, j: 2.85, wi: 0.1, wj: 0.1, alto: 12, mat: "maderaOscura" },
     { tipo: "cubo", i: 1.05, j: 2.85, wi: 0.1, wj: 0.1, alto: 12, mat: "maderaOscura" },
     { tipo: "cubo", i: 0.2, j: 0.6, wi: 1.0, wj: 2.4, alto: 2, mat: "madera", base: 12 },
-    { tipo: "cubo", i: 0.35, j: 0.75, wi: 0.65, wj: 0.8, alto: 3, mat: "blanco", base: 14 },
-    { tipo: "cubo", i: 0.35, j: 1.75, wi: 0.65, wj: 0.3, alto: 2, mat: "vino", base: 14 },
+    { tipo: "cubo", i: 0.35, j: 0.72, wi: 0.6, wj: 0.5, alto: 3, mat: "blanco", base: 14 },
+    { tipo: "cubo", i: 0.35, j: 1.3, wi: 0.6, wj: 0.26, alto: 2, mat: "vino", base: 14 },
+    { tipo: "cubo", i: 0.35, j: 1.62, wi: 0.6, wj: 0.22, alto: 2, mat: "metal", base: 14 },
     { tipo: "cubo", i: 0.35, j: 2.05, wi: 0.6, wj: 0.65, alto: 4, mat: "tinta", base: 14 },
     { tipo: "cubo", i: 0.4, j: 2.1, wi: 0.45, wj: 0.16, alto: 5, mat: "tinta", base: 18 },
-    { tipo: "cubo", i: 2.9, j: 0.2, wi: 1.7, wj: 0.5, alto: 22, mat: "maderaOscura" },
-    { tipo: "cubo", i: 3.0, j: 0.28, wi: 0.55, wj: 0.34, alto: 7, mat: "carton", base: 22 },
-    { tipo: "cubo", i: 3.72, j: 0.28, wi: 0.55, wj: 0.34, alto: 10, mat: "carton", base: 22 },
-    { tipo: "sprite", sprite: PERCHA, i: 0.9, j: 4.3 },
-    { tipo: "sprite", sprite: MATA, i: 5.6, j: 4.4 },
+    { tipo: "sprite", sprite: TIJERAS, i: 0.7, j: 0.95, sube: 14 },
+    // tablero de herramienta colgado
+    { tipo: "cubo", i: 0.02, j: 3.5, wi: 0.06, wj: 1.3, alto: 16, mat: "maderaOscura", base: 34 },
+    { tipo: "cubo", i: 0.02, j: 4.0, wi: 0.05, wj: 0.12, alto: 5, mat: "metal", base: 40 },
+    { tipo: "cubo", i: 0.02, j: 4.3, wi: 0.05, wj: 0.12, alto: 7, mat: "metal", base: 40 },
+
+    // --- pared derecha (j=0): repisas con lote, reloj y cuadro
+    { tipo: "cubo", i: 1.5, j: 0.2, wi: 1.9, wj: 0.5, alto: 22, mat: "maderaOscura" },
+    { tipo: "cubo", i: 1.6, j: 0.28, wi: 0.5, wj: 0.34, alto: 7, mat: "carton", base: 22 },
+    { tipo: "cubo", i: 2.2, j: 0.28, wi: 0.5, wj: 0.34, alto: 10, mat: "carton", base: 22 },
+    { tipo: "cubo", i: 2.8, j: 0.28, wi: 0.5, wj: 0.34, alto: 6, mat: "carton", base: 22 },
+    { tipo: "cubo", i: 1.5, j: 0.2, wi: 1.9, wj: 0.45, alto: 2, mat: "maderaOscura", base: 36 },
+    { tipo: "cubo", i: 1.7, j: 0.26, wi: 0.35, wj: 0.3, alto: 5, mat: "vino", base: 38 },
+    { tipo: "cubo", i: 2.3, j: 0.26, wi: 0.35, wj: 0.3, alto: 5, mat: "blanco", base: 38 },
+    { tipo: "cubo", i: 2.9, j: 0.26, wi: 0.35, wj: 0.3, alto: 5, mat: "metal", base: 38 },
+    { tipo: "cubo", i: 6.0, j: 0.03, wi: 0.45, wj: 0.05, alto: 8, mat: "blanco", base: 48 },
+    { tipo: "cubo", i: 1.1, j: 0.03, wi: 0.5, wj: 0.05, alto: 11, mat: "madera", base: 40 },
+
+    // --- piso: lo que hace taller
+    { tipo: "sprite", sprite: MANIQUI, i: 1.25, j: 4.6 },
+    { tipo: "sprite", sprite: ROLLOS, i: 0.75, j: 5.9 },
+    { tipo: "sprite", sprite: PERCHA, i: 0.6, j: 3.3 },
+    { tipo: "sprite", sprite: MATA, i: 6.4, j: 2.1 },
+    // mesa chica auxiliar
+    { tipo: "cubo", i: 5.5, j: 0.9, wi: 0.75, wj: 0.75, alto: 11, mat: "madera" },
+    { tipo: "cubo", i: 5.6, j: 1.0, wi: 0.5, wj: 0.5, alto: 4, mat: "carton", base: 11 },
+    // taburete
+    { tipo: "cubo", i: 3.9, j: 1.5, wi: 0.42, wj: 0.42, alto: 9, mat: "maderaOscura" },
+    // cajas del lote en el piso
+    { tipo: "cubo", i: 5.9, j: 3.3, wi: 0.72, wj: 0.72, alto: 9, mat: "carton" },
+    { tipo: "cubo", i: 5.95, j: 3.35, wi: 0.62, wj: 0.62, alto: 8, mat: "carton", base: 9 },
+    { tipo: "cubo", i: 5.2, j: 4.2, wi: 0.7, wj: 0.7, alto: 9, mat: "carton" },
+    // caneca con retazos
+    { tipo: "cubo", i: 2.9, j: 6.2, wi: 0.5, wj: 0.5, alto: 10, mat: "metal" },
+    { tipo: "cubo", i: 2.98, j: 6.28, wi: 0.34, wj: 0.34, alto: 3, mat: "vino", base: 10 },
+    // tabla de planchar
+    { tipo: "cubo", i: 4.6, j: 5.9, wi: 1.1, wj: 0.38, alto: 2, mat: "blanco", base: 11 },
+    { tipo: "cubo", i: 4.75, j: 6.0, wi: 0.08, wj: 0.08, alto: 11, mat: "metal" },
+    { tipo: "cubo", i: 5.5, j: 6.0, wi: 0.08, wj: 0.08, alto: 11, mat: "metal" },
+    { tipo: "cubo", i: 4.75, j: 5.95, wi: 0.3, wj: 0.26, alto: 4, mat: "tinta", base: 13 },
+    // primer plano: cajas apiladas junto a la cámara (la capa de profundidad de §15 regla 3)
+    { tipo: "cubo", i: 6.3, j: 6.1, wi: 0.85, wj: 0.85, alto: 12, mat: "carton" },
+    { tipo: "cubo", i: 6.35, j: 6.15, wi: 0.75, wj: 0.75, alto: 10, mat: "carton", base: 12 },
   ],
 };
 
